@@ -1,0 +1,63 @@
+"""应用配置管理"""
+from typing import List
+from pydantic_settings import BaseSettings
+from pydantic import Field
+
+
+class Settings(BaseSettings):
+    """应用配置"""
+
+    # 应用基础配置
+    APP_NAME: str = "简历智能初筛系统"
+    APP_VERSION: str = "1.0.0"
+    DEBUG: bool = False
+
+    # 数据库配置
+    DATABASE_URL: str = Field(
+        default="postgresql+asyncpg://resume:resume123@db:5432/resume_screening",
+        description="数据库连接URL"
+    )
+
+    # Redis配置
+    REDIS_URL: str = Field(
+        default="redis://redis:6379/0",
+        description="Redis连接URL"
+    )
+
+    # JWT配置
+    SECRET_KEY: str = Field(
+        default="your-secret-key-change-in-production",
+        description="JWT密钥"
+    )
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24小时
+
+    # 加密配置
+    ENCRYPTION_KEY: str = Field(
+        default="your-encryption-key-32-bytes-long-change",
+        description="AES加密密钥，必须是32字节"
+    )
+
+    # CORS配置
+    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:80"]
+
+    # Celery配置
+    CELERY_BROKER_URL: str = Field(
+        default="redis://redis:6379/0",
+        description="Celery broker URL"
+    )
+    CELERY_RESULT_BACKEND: str = Field(
+        default="redis://redis:6379/0",
+        description="Celery result backend"
+    )
+
+    # 邮箱配置（默认值）
+    DEFAULT_IMAP_SERVER: str = "imap.exmail.qq.com"
+    DEFAULT_IMAP_PORT: int = 993
+
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+
+
+settings = Settings()

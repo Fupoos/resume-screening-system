@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  db:
+    image: postgres:15
+    container_name: resume-db
+    environment:
+      POSTGRES_USER: resume
+      POSTGRES_PASSWORD: resume123
+      POSTGRES_DB: resume_screening
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resume"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: resume-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI后端
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: resume-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://resume:resume123@db:5432/resume_screening
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-secret-key-change-in-production
+      - ENCRYPTION_KEY=your-encryption-key-32-bytes-long-change
+      - DEBUG=True
+      - DEMO_EMAIL=es1@cloudpense.com
+      - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
+    volumes:
+      - ./backend:/app
+      - resume_files:/app/resume_files
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: resume-celery
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://resume:resume123@db:5432/resume_screening
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-secret-key-change-in-production
+      - ENCRYPTION_KEY=your-encryption-key-32-bytes-long-change
+      - DEMO_EMAIL=es1@cloudpense.com
+      - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
+    volumes:
+      - ./backend:/app
+      - resume_files:/app/resume_files
+    depends_on:
+      - db
+      - redis
+    command: celery -A app.tasks.celery_app worker -l info
+
+  # Celery Beat (定时任务调度器)
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: resume-celery-beat
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://resume:resume123@db:5432/resume_screening
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-secret-key-change-in-production
+      - ENCRYPTION_KEY=your-encryption-key-32-bytes-long-change
+      - DEMO_EMAIL=es1@cloudpense.com
+      - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
+    volumes:
+      - ./backend:/app
+      - resume_files:/app/resume_files
+    depends_on:
+      - redis
+      - db
+    command: celery -A app.tasks.celery_app beat -l info
+
+  # React前端
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: resume-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  postgres_data:
+  resume_files:
