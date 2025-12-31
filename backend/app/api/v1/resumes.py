@@ -54,58 +54,20 @@ def list_resumes(
     # 转换为字典格式
     resume_list = []
     for resume in resumes:
-        # 获取该简历的筛选结果（前2名）
-        screening_results = db.query(ScreeningResult).filter(
-            ScreeningResult.resume_id == resume.id
-        ).order_by(ScreeningResult.match_score.desc()).limit(2).all()
-
-        # 转换筛选结果为前端需要的格式
-        top_matches = []
-        for sr in screening_results:
-            # 找到对应的岗位
-            job = None
-            for j in preset_jobs:
-                if str(j['id']) == str(sr.job_id):
-                    job = j
-                    break
-
-            # 添加诊断日志：如果找不到对应的岗位
-            if not job:
-                logger.warning(
-                    f"岗位ID匹配失败: resume_id={resume.id}, "
-                    f"job_id={sr.job_id} (type={type(sr.job_id).__name__}), "
-                    f"preset_job_ids={[str(j['id']) for j in preset_jobs]}"
-                )
-                continue
-
-            top_matches.append({
-                'job_id': str(sr.job_id),
-                'job_name': job['name'],
-                'job_category': job['category'],
-                'match_score': sr.match_score,
-                'skill_score': sr.skill_score,
-                'experience_score': sr.experience_score,
-                'education_score': sr.education_score,
-                'screening_result': sr.screening_result,
-                'matched_points': sr.matched_points or [],
-                'unmatched_points': sr.unmatched_points or [],
-                'suggestion': sr.suggestion
-            })
-
         resume_dict = {
             "id": str(resume.id),
             "candidate_name": resume.candidate_name,
             "phone": resume.phone,
             "email": resume.email,
             "education": resume.education,
+            "education_level": resume.education_level,
             "work_years": resume.work_years,
             "skills": resume.skills or [],
-            "skills_by_level": resume.skills_by_level,  # 新增
+            "skills_by_level": resume.skills_by_level,
             "status": resume.status,
             "file_type": resume.file_type,
             "created_at": resume.created_at.isoformat() if resume.created_at else None,
             "updated_at": resume.updated_at.isoformat() if resume.updated_at else None,
-            "top_matches": top_matches
         }
         resume_list.append(resume_dict)
 
