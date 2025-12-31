@@ -2,10 +2,10 @@
 import time
 import uuid
 import logging
-import requests
+import httpx
 from typing import Dict, Optional
 
-from app.core.agent_config import get_endpoint, get_api_key, get_pdf_base_url
+from app.core.agent_config import get_endpoint, get_api_key, get_pdf_base_url, get_fastgpt_config
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ class AgentClient:
         """初始化Agent客户端"""
         self.api_key = get_api_key()
         self.pdf_base_url = get_pdf_base_url()
+        self.fastgpt_client = None  # 延迟初始化FastGPT客户端
 
     def evaluate_resume(
         self,
@@ -50,6 +51,82 @@ class AgentClient:
             logger.error(error_msg)
             raise ValueError(error_msg)
 
+        # 根据type选择调用方式
+        agent_type = endpoint_config.get("type", "http")
+
+        if agent_type == "fastgpt":
+            # 使用FastGPT进行评估
+            return self._evaluate_with_fastgpt(job_title, resume_data)
+        else:
+            # 使用传统HTTP Agent进行评估
+            return self._evaluate_with_http(endpoint_config, job_title, city, pdf_path, resume_data)
+
+    def _evaluate_with_fastgpt(
+        self,
+        job_title: str,
+        resume_data: dict
+    ) -> dict:
+        """使用FastGPT评估简历
+
+        Args:
+            job_title: 职位名称
+            resume_data: 简历数据
+
+        Returns:
+            评估结果字典
+        """
+        try:
+            # 延迟初始化FastGPT客户端
+            if not self.fastgpt_client:
+                config = get_fastgpt_config()
+                if not config.get("api_key"):
+                    raise ValueError("FastGPT API密钥未配置，请设置FASTGPT_API_KEY环境变量")
+
+                from app.services.fastgpt_client import FastGPTClient
+                self.fastgpt_client = FastGPTClient(
+                    api_key=config["api_key"],
+                    base_url=config["base_url"]
+                )
+
+            # 调用FastGPT
+            logger.info(f"使用FastGPT评估职位: {job_title}")
+            result = self.fastgpt_client.evaluate_resume(
+                resume_text=resume_data.get("raw_text", ""),
+                candidate_name=resume_data.get("candidate_name", ""),
+                job_title=job_title
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"FastGPT评估失败: {str(e)}")
+            # 返回默认结果（待定状态）
+            return {
+                "score": 50,
+                "evaluation_id": str(uuid.uuid4()),
+                "details": {"error": str(e)}
+            }
+
+    def _evaluate_with_http(
+        self,
+        endpoint_config: dict,
+        job_title: str,
+        city: Optional[str],
+        pdf_path: str,
+        resume_data: dict
+    ) -> dict:
+        """使用传统HTTP Agent评估简历
+
+        Args:
+            endpoint_config: endpoint配置
+            job_title: 职位名称
+            city: 城市名称
+            pdf_path: PDF文件路径
+            resume_data: 简历数据
+
+        Returns:
+            评估结果字典
+        """
         # 构建请求payload
         payload = self._build_payload(job_title, city, pdf_path, resume_data)
 
@@ -68,7 +145,7 @@ class AgentClient:
             }
 
         except Exception as e:
-            logger.error(f"Agent调用失败: {str(e)}")
+            logger.error(f"HTTP Agent调用失败: {str(e)}")
             # Agent调用失败，返回默认结果（标记为待定）
             return {
                 "score": 50,  # 默认50分，标记为待定
@@ -155,31 +232,31 @@ class AgentClient:
                 logger.info(f"调用Agent: {url} (尝试 {attempt + 1}/{max_retries})")
 
                 # 发送HTTP请求
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=timeout
-                )
+                with httpx.Client(timeout=timeout) as client:
+                    response = client.post(
+                        url,
+                        json=payload,
+                        headers=headers
+                    )
 
-                # 检查响应状态
-                response.raise_for_status()
+                    # 检查响应状态
+                    response.raise_for_status()
 
-                # 解析响应
-                response_data = response.json()
+                    # 解析响应
+                    response_data = response.json()
 
-                # 检查业务状态
-                if response_data.get("success", False):
-                    logger.info(f"Agent调用成功: score={response_data.get('data', {}).get('score')}")
-                    return response_data.get("data", {})
-                else:
-                    error_msg = response_data.get("error", "Agent返回失败")
-                    raise Exception(f"Agent业务错误: {error_msg}")
+                    # 检查业务状态
+                    if response_data.get("success", False):
+                        logger.info(f"Agent调用成功: score={response_data.get('data', {}).get('score')}")
+                        return response_data.get("data", {})
+                    else:
+                        error_msg = response_data.get("error", "Agent返回失败")
+                        raise Exception(f"Agent业务错误: {error_msg}")
 
-            except requests.exceptions.Timeout as e:
+            except httpx.TimeoutException as e:
                 last_error = e
                 logger.warning(f"Agent调用超时: {str(e)}")
-            except requests.exceptions.RequestException as e:
+            except httpx.HTTPError as e:
                 last_error = e
                 logger.warning(f"Agent请求失败: {str(e)}")
             except Exception as e:

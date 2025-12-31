@@ -29,9 +29,12 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 @router.get("/", response_model=dict)
 def list_resumes(
     skip: int = Query(0, ge=0, description="跳过记录数"),
-    limit: int = Query(10, ge=1, le=100, description="返回记录数"),
+    limit: int = Query(10, ge=1, le=500, description="返回记录数"),
     status: Optional[str] = Query(None, description="筛选状态"),
-    has_pdf_and_content: bool = Query(False, description="只返回既有PDF文件又有正文的简历"),
+    file_type: Optional[str] = Query(None, description="筛选文件类型"),
+    has_pdf_and_content: bool = Query(False, description="只返回既有PDF文件又有正文的��历"),
+    agent_evaluated: Optional[bool] = Query(None, description="只返回已通过Agent评估的简历"),
+    min_score: Optional[int] = Query(None, description="最低Agent评分"),
     db: Session = Depends(get_db)
 ):
     """获取简历列表"""
@@ -39,6 +42,9 @@ def list_resumes(
 
     if status:
         query = query.filter(Resume.status == status)
+
+    if file_type:
+        query = query.filter(Resume.file_type == file_type)
 
     # 只返回既有PDF又有正文的简历
     if has_pdf_and_content:
@@ -48,8 +54,24 @@ def list_resumes(
             Resume.raw_text != ''
         )
 
+    # 只返回已通过Agent评估的简历
+    if agent_evaluated:
+        query = query.filter(
+            Resume.agent_score.isnot(None),
+            Resume.agent_score > 0
+        )
+
+    # 最低Agent评分
+    if min_score is not None:
+        query = query.filter(Resume.agent_score >= min_score)
+
     total = query.count()
-    resumes = query.order_by(Resume.created_at.desc()).offset(skip).limit(limit).all()
+
+    # 根据是否Agent评估决定排序方式
+    if agent_evaluated or min_score is not None:
+        resumes = query.order_by(Resume.agent_evaluated_at.desc()).offset(skip).limit(limit).all()
+    else:
+        resumes = query.order_by(Resume.created_at.desc()).offset(skip).limit(limit).all()
 
     # 转换为字典格式
     resume_list = []
@@ -68,6 +90,13 @@ def list_resumes(
             "file_type": resume.file_type,
             "created_at": resume.created_at.isoformat() if resume.created_at else None,
             "updated_at": resume.updated_at.isoformat() if resume.updated_at else None,
+            # Agent相关字段
+            "city": resume.city,
+            "job_category": resume.job_category,
+            "agent_score": resume.agent_score,
+            "agent_evaluation_id": resume.agent_evaluation_id,
+            "screening_status": resume.screening_status,
+            "agent_evaluated_at": resume.agent_evaluated_at.isoformat() if resume.agent_evaluated_at else None,
         }
         resume_list.append(resume_dict)
 
@@ -93,6 +122,7 @@ def get_resume(resume_id: UUID, db: Session = Depends(get_db)):
         "phone": resume.phone,
         "email": resume.email,
         "education": resume.education,
+        "education_level": resume.education_level,
         "work_years": resume.work_years,
         "skills": resume.skills or [],
         "skills_by_level": resume.skills_by_level,  # 新增

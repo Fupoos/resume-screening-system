@@ -208,25 +208,37 @@ class ResumeParser:
         支持格式：
         1. 13800138000（连续11位）
         2. 158 0066 4286（带空格）
-        3. 139 1234 5678（带空格）
-        4. 021-12345678（座机）
+        3. 139-1234-5678（带横杠）
+        4. （+86）139-1234-5678（带国家代码）
+        5. Tel:(+86)139-1234-5678（英文格式）
         """
-        # 预处理：移除所有空格，以便匹配带空格的手机号
-        text_no_spaces = text.replace(' ', '').replace('　', '')  # 包括中文空格
+        # 预处理：移除所有空格和中文空格
+        text_no_spaces = text.replace(' ', '').replace('　', '')
 
-        # 匹配手机号格式
-        patterns = [
-            r'1[3-9]\d{9}',  # 11位手机号（从去空格后的文本中匹配）
-            r'\d{3,4}-\d{7,8}',  # 座机号（原格式）
-        ]
-
-        # 优先从去空格的文本中匹配手机号
-        match = re.search(patterns[0], text_no_spaces)
+        # 先尝试直接匹配11位手机号
+        match = re.search(r'1[3-9]\d{9}', text_no_spaces)
         if match:
             return match.group()
 
+        # 尝试匹配带国家代码的格式：(+86) 139-1234-5678 或 （+86）139-1234-5678
+        match = re.search(r'[\(（]\+86[\)）]\s*-?\s*1[3-9]\d{9}', text_no_spaces)
+        if match:
+            # 提取纯手机号
+            phone_match = re.search(r'1[3-9]\d{9}', match.group())
+            if phone_match:
+                return phone_match.group()
+
+        # 尝试匹配带横杠的手机号
+        match = re.search(r'1[3-9]\d[-\s]?\d{4}[-\s]?\d{4}', text_no_spaces)
+        if match:
+            # 清理横杠和空格
+            phone = match.group()
+            phone = phone.replace('-', '').replace(' ', '')
+            if len(phone) == 11:
+                return phone
+
         # 匹配座机号（从原文）
-        match = re.search(patterns[1], text)
+        match = re.search(r'\d{3,4}-\d{7,8}', text)
         if match:
             return match.group()
 
@@ -253,22 +265,54 @@ class ResumeParser:
             '教育背景', '基本信息', '个人优势', '工作经历', '项目经验',
             '求职意向', '教育经历', '专业技能', '自我评价', '联系方式',
             '个人简历', '简历', '姓名', '名字', '候选人', '应聘',
+            '求职信息', '出生年月', '政治面貌', '工作年限',
+            '个人信息', '个人总结', '个人简介', '个人评价', '优势亮点',
+            '掌握技能', '资格证书',
             # 信息字段
             '男', '女', '年龄', '电话', '邮箱', '邮箱', '地址', '籍贯',
             '学历', '学位', '专业', '学校', '毕业', '院校',
             # 学历
             '本科', '硕士', '博士', '大专', '专科', '高中', '中专',
             '专升本', '研究生', '本科生', '硕士生', '博士生',
+            '本科学位', '硕士学位', '博士学位', '双一流',
+            # 学科/专业
+            '会计', '会计学', '审计', '统计学', '软件工程', '电子信息',
+            '计算机科学', '通信工程', '机械工程', '数据科学',
+            '人工智能', '自动化', '电气工程', '财务管理',
             # 职位/岗位相关
             '总账会计', '财务专员', '销售总监', '软件工程师', '产品经理',
             '项目经历', '实习经历', '工作内容', '主要职责',
-            # 专业/学科
-            '软件工程', '电子信息', '计算机科学', '通信工程', '机械工程',
-            '数据科学', '人工智能', '自动化', '电气工程',
+            # 城市/地点
+            '上海', '北京', '深圳', '广州', '杭州', '成都', '武汉',
+            '西安', '南京', '重庆', '天津', '苏州', '长沙', '青岛', '长春',
+            # 公司名（常见误识别）
+            '明源云', '用友', '金蝶', '卫泰集团',
             # 其他常见非姓名词汇
             '个人介绍', '基本信息', '专业技能', '主修课程', '获奖情况',
             '证书情况', '语言能力', '计算机能力', '工作内容',
         }
+
+        # 模式0: 查找行首的姓名（常见格式：姓名 求职意向:xxx）
+        for line in lines[:20]:
+            line = line.strip()
+            # 跳过空行和太长的行
+            if not line or len(line) > 50:
+                continue
+            # 匹配行首的2-4个汉字（后面可能跟空格、"求职意向"、"应聘"等）
+            # 例如："刘泽钰 求职意向:项目经理" 或 "张三 应聘Java开发"
+            match = re.search(r'^([一-龥]{2,4})\s+(求职意向|应聘|意向|岗位)', line)
+            if match:
+                name = match.group(1).strip()
+                if self._is_valid_name(name, blacklist):
+                    return name
+            
+            # 匹配行首的2-4个汉字加冒号（可能是姓名但后面是其他信息）
+            # 例如："刘泽钰: 男" 或 "张三：1990年"
+            match = re.search(r'^([一-龥]{2,4})\s*[:：]', line)
+            if match:
+                name = match.group(1).strip()
+                if self._is_valid_name(name, blacklist):
+                    return name
 
         # 模式1: 查找明确的"姓名：xxx"或"名字：xxx"格式
         for line in lines[:20]:
@@ -316,6 +360,24 @@ class ResumeParser:
                     if self._is_valid_name(name, blacklist):
                         return name
                     break  # 只检查第一个部分
+
+        # 模式4: 在联系方式附近查找姓名（邮箱/电话前后）
+        common_surname_chars = set('赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉��薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董粱杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍万柯卢莫房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉钮龚')
+        for i, line in enumerate(lines):
+            line = line.strip()
+            # 查找包含邮箱或电话号码的行
+            if '@' in line or re.search(r'1[3-9]\d{9}', line):
+                # 检查前1-3行是否有独立成行的2-4个汉字
+                for j in range(max(0, i-3), i):
+                    check_line = lines[j].strip()
+                    # 匹配独立的2-4个汉字（可能前后有空格）
+                    match = re.search(r'^[\s]*([\u4e00-\u9fa5]{2,4})[\s]*$', check_line)
+                    if match:
+                        name = match.group(1).strip()
+                        # 严格检查：不能是黑名单词，第一个字必须是常见姓氏
+                        if name not in blacklist and name[0] in common_surname_chars:
+                            if self._is_valid_name(name, blacklist):
+                                return name
 
         return None
 
@@ -464,7 +526,15 @@ class ResumeParser:
         # 匹配开头的时间戳模式：数字_数字_
         basename = re.sub(r'^\d{8}_\d{6}_', '', basename)
 
-        # ========== 模式2: "职位-姓名（备注）"（最常见）==========
+        # ========== 模式2: "【职位_地点_薪资】姓名_年限"（BOSS直聘格式）==========
+        # 例如："【财务咨询顾问（深圳）_深圳_10-15K】邹喆_2年.pdf"
+        match = re.search(r'】([\u4e00-\u9fa5]{2,4})_', basename)
+        if match:
+            name = match.group(1).strip()
+            if self._is_valid_name(name, blacklist):
+                return name
+
+        # ========== 模式3: "职位-姓名（备注）"（最常见）==========
         # 例如："财务信息化顾问-李景昱（中）"
         match = re.search(r'-([\u4e00-\u9fa5]{2,4})(?:（[^）]*）)?$', basename)
         if match:
@@ -472,7 +542,7 @@ class ResumeParser:
             if self._is_valid_name(name, blacklist):
                 return name
 
-        # ========== 模式3: "职位-姓名"（无括号）==========
+        # ========== 模式4: "职位-姓名"（无括号）==========
         # 例如："产品经理-张三"
         match = re.search(r'-([\u4e00-\u9fa5]{2,4})$', basename)
         if match:

@@ -96,7 +96,10 @@ export const getResumes = async (params?: {
   status?: string;
   skip?: number;
   limit?: number;
+  file_type?: string;
   has_pdf_and_content?: boolean;  // 只返回既有PDF又有正文的简历
+  agent_evaluated?: boolean;  // 只返回已通过Agent评估的简历
+  min_score?: number;  // 最低Agent评分
 }): Promise<{ total: number; items: any[]; page?: number; page_size?: number }> => {
   return api.get('/resumes/', { params });
 };

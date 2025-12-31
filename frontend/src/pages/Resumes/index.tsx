@@ -31,6 +31,7 @@ const { Dragger } = Upload;
 const ResumesPage = () => {
   const [resumes, setResumes] = useState<Resume[]>([]);
   const [loading, setLoading] = useState(false);
+  const [total, setTotal] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [checkingEmail, setCheckingEmail] = useState(false);
   const [polling, setPolling] = useState(false);
@@ -41,7 +42,7 @@ const ResumesPage = () => {
 
   // 加载简历列表
   useEffect(() => {
-    loadResumes();
+    handleRefresh();
   }, []);
 
   // 学历等级颜色映射
@@ -51,22 +52,34 @@ const ResumesPage = () => {
       '211': 'orange',
       'QS前50': 'purple',
       'QS前100': 'blue',
+      'QS前200': 'cyan',
       '双非': 'default',
     };
     return colorMap[level] || 'default';
   };
 
-  const loadResumes = async () => {
+  const loadResumes = async (page = 1, pageSize = 100) => {
     setLoading(true);
     try {
-      // 只获取既有PDF又有正文的简历
-      const data = await getResumes({ has_pdf_and_content: true, limit: 100 });
+      // 计算跳过数量
+      const skip = (page - 1) * pageSize;
+      // 只获取PDF类型的简历
+      const data = await getResumes({ limit: pageSize, skip: skip, file_type: 'pdf' });
       setResumes(data.items || []);
+      setTotal(data.total || 0);
     } catch (error) {
       message.error('加载简历列表失败');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleTableChange = (page: number, pageSize: number) => {
+    loadResumes(page, pageSize);
+  };
+
+  const handleRefresh = () => {
+    loadResumes(1, 50);
   };
 
   const handleCheckEmail = async () => {
@@ -85,7 +98,7 @@ const ResumesPage = () => {
 
       const pollInterval = setInterval(async () => {
         pollCount++;
-        await loadResumes();
+        await handleRefresh();
 
         if (pollCount >= maxPolls) {
           clearInterval(pollInterval);
@@ -97,7 +110,7 @@ const ResumesPage = () => {
       // 立即刷新一次
       setTimeout(() => {
         message.info('正在刷新简历列表...');
-        loadResumes();
+        handleRefresh();
       }, 3000);
 
     } catch (error) {
@@ -133,7 +146,7 @@ const ResumesPage = () => {
       message.success('简历上传成功！');
       onSuccess?.(result);
       setUploadModalVisible(false);
-      loadResumes();
+      handleRefresh();
     } catch (error) {
       message.error('上传简历失败');
       onError?.(error as Error);
@@ -153,7 +166,7 @@ const ResumesPage = () => {
         try {
           await deleteResume(id);
           message.success('删除成功');
-          loadResumes();
+          handleRefresh();
         } catch (error) {
           message.error('删除失败');
         }
@@ -280,7 +293,7 @@ const ResumesPage = () => {
           <Button
             type="default"
             icon={<ReloadOutlined />}
-            onClick={loadResumes}
+            onClick={handleRefresh}
             loading={loading}
           >
             刷新列表
@@ -310,10 +323,12 @@ const ResumesPage = () => {
           rowKey="id"
           loading={loading}
           pagination={{
+            total: total,
             pageSize: 50,
             showSizeChanger: true,
-            pageSizeOptions: ['20', '50', '100', '200'],
+            pageSizeOptions: ['20', '50', '100', '200', '500'],
             showTotal: (total) => `共 ${total} 份简历`,
+            onChange: handleTableChange,
           }}
           scroll={{ x: 1200 }}
         />

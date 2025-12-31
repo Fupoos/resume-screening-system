@@ -73,6 +73,16 @@ class Settings(BaseSettings):
         description="PDF文件访问基础URL"
     )
 
+    # FastGPT配置
+    FASTGPT_API_KEY: str = Field(
+        default="",
+        description="FastGPT API密钥"
+    )
+    FASTGPT_BASE_URL: str = Field(
+        default="https://ai.cloudpense.com/api",
+        description="FastGPT API基础URL"
+    )
+
     # 邮箱监听配置
     DEMO_EMAIL: str = Field(
         default="",

@@ -47,6 +47,8 @@ services:
       - DEBUG=True
       - DEMO_EMAIL=es1@cloudpense.com
       - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
+      - FASTGPT_API_KEY=api-lzaV5DY9iZH30L15AZ4gpmlFZCmdulswPhRAnKHexG97iCbVvbFqkwIL5
+      - FASTGPT_BASE_URL=https://ai.cloudpense.com/api
     volumes:
       - ./backend:/app
       - resume_files:/app/resume_files

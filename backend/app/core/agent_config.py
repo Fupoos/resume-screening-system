@@ -50,7 +50,8 @@ AGENT_ENDPOINTS: Dict[str, Dict] = {
         "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
     },
     "实施顾问_default": {
-        "url": os.getenv("AGENT_IMPLEMENTATION_URL", "https://api.example.com/implementation"),
+        "type": "fastgpt",  # 使用FastGPT进行评估
+        "url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api"),
         "timeout": int(os.getenv("AGENT_TIMEOUT", "30")),
         "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
     },
@@ -86,6 +87,21 @@ def get_api_key() -> str:
         API密钥字符串
     """
     return os.getenv("AGENT_API_KEY", "")
+
+
+def get_fastgpt_config() -> Dict[str, str]:
+    """获取FastGPT配置
+
+    Returns:
+        {
+            "api_key": "FastGPT API密钥",
+            "base_url": "FastGPT API基础URL"
+        }
+    """
+    return {
+        "api_key": os.getenv("FASTGPT_API_KEY", ""),
+        "base_url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api")
+    }
 
 
 def get_pdf_base_url() -> str:
