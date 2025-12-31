@@ -10,7 +10,6 @@ import {
   message,
   Modal,
   Descriptions,
-  Progress,
   Spin,
   Tooltip,
 } from 'antd';
@@ -25,7 +24,6 @@ import {
 import type { UploadProps } from 'antd';
 import { getResumes, deleteResume } from '../../services/api';
 import type { Resume } from '../../types';
-import { JOB_CATEGORY_LABELS, JOB_CATEGORY_COLORS } from '../../types';
 import { SkillsDisplay } from '../../components/SkillsDisplay';
 
 const { Dragger } = Upload;
@@ -45,6 +43,18 @@ const ResumesPage = () => {
   useEffect(() => {
     loadResumes();
   }, []);
+
+  // 学历等级颜色映射
+  const getEducationLevelColor = (level: string) => {
+    const colorMap: Record<string, string> = {
+      '985': 'red',
+      '211': 'orange',
+      'QS前50': 'purple',
+      'QS前100': 'blue',
+      '双非': 'default',
+    };
+    return colorMap[level] || 'default';
+  };
 
   const loadResumes = async () => {
     setLoading(true);
@@ -120,7 +130,7 @@ const ResumesPage = () => {
 
       const result = await response.json();
 
-      message.success(`简历上传成功！已自动匹配 ${result.top_matches?.length || 0} 个岗位`);
+      message.success('简历上传成功！');
       onSuccess?.(result);
       setUploadModalVisible(false);
       loadResumes();
@@ -170,34 +180,6 @@ const ResumesPage = () => {
     }
   };
 
-  // 获取筛选结果标签颜色
-  const getResultColor = (result: string) => {
-    switch (result) {
-      case 'PASS':
-        return 'success';
-      case 'REVIEW':
-        return 'warning';
-      case 'REJECT':
-        return 'error';
-      default:
-        return 'default';
-    }
-  };
-
-  // 获取筛选结果文本
-  const getResultText = (result: string) => {
-    switch (result) {
-      case 'PASS':
-        return '通过';
-      case 'REVIEW':
-        return '待定';
-      case 'REJECT':
-        return '拒绝';
-      default:
-        return result;
-    }
-  };
-
   const columns = [
     {
       title: '候选人',
@@ -208,7 +190,13 @@ const ResumesPage = () => {
         <div>
           <div style={{ fontWeight: 'bold' }}>{name || '未命名'}</div>
           <div style={{ fontSize: 12, color: '#999' }}>
-            {record.education} · {record.work_years || 0}年
+            {record.education}
+            {(record as any).education_level && (
+              <Tag color={getEducationLevelColor((record as any).education_level)} style={{ marginLeft: 4, fontSize: 11 }}>
+                {(record as any).education_level}
+              </Tag>
+            )}
+            · {record.work_years || 0}年
           </div>
         </div>
       ),
@@ -230,49 +218,8 @@ const ResumesPage = () => {
       key: 'skills',
       width: 300,
       render: (skills: string[]) => (
-        <SkillsDisplay skills={skills || []} maxDisplay={8} />
+        <SkillsDisplay skills={skills || []} maxDisplay={4} />
       ),
-    },
-    {
-      title: '最佳匹配',
-      key: 'top_match',
-      width: 220,
-      render: (_: any, record: Resume) => {
-        const topMatches = (record as any).top_matches || [];
-        if (topMatches.length === 0) {
-          return <span style={{ color: '#999', fontSize: 12 }}>暂无匹配结果</span>;
-        }
-
-        return (
-          <Space direction="vertical" size={4}>
-            {topMatches.map((match: any, index: number) => (
-              <div key={index} style={{ fontSize: 12 }}>
-                <div style={{ marginBottom: 4 }}>
-                  <Tag color={JOB_CATEGORY_COLORS[match.job_category as keyof typeof JOB_CATEGORY_COLORS]} style={{ marginRight: 4, fontSize: 11 }}>
-                    {JOB_CATEGORY_LABELS[match.job_category as keyof typeof JOB_CATEGORY_LABELS]}
-                  </Tag>
-                  <span style={{ fontWeight: 600, fontSize: 13 }}>{match.job_name}</span>
-                  <Tag color={getResultColor(match.screening_result)} style={{ fontSize: 11, marginLeft: 8 }}>
-                    {getResultText(match.screening_result)}
-                  </Tag>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Progress
-                    percent={match.match_score}
-                    size="small"
-                    status={match.match_score >= 70 ? 'success' : match.match_score >= 50 ? 'normal' : 'exception'}
-                    showInfo={false}
-                    style={{ flex: 1 }}
-                  />
-                  <span style={{ fontSize: 12, fontWeight: 'bold', color: match.match_score >= 70 ? '#52c41a' : match.match_score >= 50 ? '#faad14' : '#f5222d', minWidth: 45 }}>
-                    {match.match_score}分
-                  </span>
-                </div>
-              </div>
-            ))}
-          </Space>
-        );
-      },
     },
     {
       title: '状态',
@@ -422,7 +369,16 @@ const ResumesPage = () => {
               <Descriptions.Item label="性别">-</Descriptions.Item>
               <Descriptions.Item label="手机">{selectedResume.phone || '-'}</Descriptions.Item>
               <Descriptions.Item label="邮箱">{selectedResume.email || '-'}</Descriptions.Item>
-              <Descriptions.Item label="学历">{selectedResume.education || '-'}</Descriptions.Item>
+              <Descriptions.Item label="学历">
+                <Space>
+                  {selectedResume.education || '-'}
+                  {(selectedResume as any).education_level && (
+                    <Tag color={getEducationLevelColor((selectedResume as any).education_level)}>
+                      {(selectedResume as any).education_level}
+                    </Tag>
+                  )}
+                </Space>
+              </Descriptions.Item>
               <Descriptions.Item label="工作年限">{selectedResume.work_years || 0}年</Descriptions.Item>
             </Descriptions>
 
@@ -489,43 +445,6 @@ const ResumesPage = () => {
                 >
                   {(selectedResume as any).raw_text}
                 </div>
-              </div>
-            )}
-
-            {(selectedResume as any).top_matches && (selectedResume as any).top_matches.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <h4>匹配结果（前2名）</h4>
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  {(selectedResume as any).top_matches.map((match: any, index: number) => (
-                    <Card key={index} size="small" style={{ background: index === 0 ? '#f6ffed' : '#fffbe6' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <Tag color={JOB_CATEGORY_COLORS[match.job_category as keyof typeof JOB_CATEGORY_COLORS]} style={{ marginRight: 8 }}>
-                            {JOB_CATEGORY_LABELS[match.job_category as keyof typeof JOB_CATEGORY_LABELS]}
-                          </Tag>
-                          <span style={{ fontWeight: 'bold', fontSize: 16 }}>{match.job_name}</span>
-                          <Tag
-                            color={getResultColor(match.screening_result)}
-                            style={{ marginLeft: 8 }}
-                          >
-                            {getResultText(match.screening_result)}
-                          </Tag>
-                        </div>
-                        <div style={{ fontSize: 24, fontWeight: 'bold', color: '#1890ff' }}>
-                          {match.match_score}分
-                        </div>
-                      </div>
-                      <Progress
-                        percent={match.match_score}
-                        status={match.match_score >= 70 ? 'success' : match.match_score >= 50 ? 'normal' : 'exception'}
-                        style={{ marginTop: 8 }}
-                      />
-                      <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-                        {match.suggestion}
-                      </div>
-                    </Card>
-                  ))}
-                </Space>
               </div>
             )}
           </div>

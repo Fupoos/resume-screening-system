@@ -193,6 +193,7 @@ def parse_resume(file_path: str, email_info: dict):
             phone=resume_data.get('phone'),
             email=resume_data.get('email'),
             education=resume_data.get('education'),
+            education_level=resume_data.get('education_level'),
             work_years=resume_data.get('work_years', 0),
             skills=resume_data.get('skills', []),
             skills_by_level=resume_data.get('skills_by_level', {}),
@@ -656,6 +657,7 @@ def parse_email_body(email_info: dict, email_config: dict):
             phone=phone,
             email=email_addr,
             education=None,
+            education_level=None,
             work_years=work_years,
             skills=extracted_skills,  # 使用提取的技能
             skills_by_level={},

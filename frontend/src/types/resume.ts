@@ -13,6 +13,7 @@ export interface Resume {
   phone: string | null;
   email: string | null;
   education: string | null;
+  education_level: string | null;
   work_years: number | null;
   skills: string[];
   skills_by_level?: SkillsByLevel;

@@ -162,13 +162,23 @@ class ResumeParser:
         if result['education_history']:
             # 取最高学历
             education_order = ['博士', '硕士', '本科', '大专', '高中']
+            highest_edu_record = None
             for edu in education_order:
                 for edu_history in result['education_history']:
                     if edu in edu_history.get('degree', ''):
                         result['education'] = edu
+                        highest_edu_record = edu_history
                         break
                 if result['education']:
                     break
+
+            # 判断最高学历的学校类型
+            if highest_edu_record and highest_edu_record.get('school'):
+                from app.services.school_classifier import get_school_classifier
+                classifier = get_school_classifier()
+                school_name = highest_edu_record.get('school', '')
+                result['education_level'] = classifier.classify(school_name)
+                logger.info(f"学历：{result['education']}，学校：{school_name}，等级：{result.get('education_level', '未知')}")
 
         # 提取工作经历
         result['work_experience'] = self._extract_work_experience(text)

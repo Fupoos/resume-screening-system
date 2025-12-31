@@ -17,6 +17,7 @@ class Resume(Base):
 
     # 基本信息
     education = Column(String(50))  # 最高学历
+    education_level = Column(String(20))  # 学历等级标注：985/211/双非/QS前50/QS前100
     work_years = Column(Integer)  # 工作年限
 
     # 结构化��据（JSONB）
