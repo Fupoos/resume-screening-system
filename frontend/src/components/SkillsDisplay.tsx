@@ -131,7 +131,7 @@ const SKILL_CATEGORIES: Record<string, { icon: React.ReactNode; color: string; l
   英语: { icon: <GlobalOutlined />, color: 'blue', label: '语言能力' },
   英语六级: { icon: <GlobalOutlined />, color: 'blue', label: '语言能力' },
   CET6: { icon: <GlobalOutlined />, color: 'blue', label: '语言能力' },
-  CET-6: { icon: <GlobalOutlined />, color: 'blue', label: '语言能力' },
+  'CET-6': { icon: <GlobalOutlined />, color: 'blue', label: '语言能力' },
   德语: { icon: <GlobalOutlined />, color: 'cyan', label: '语言能力' },
   法语: { icon: <GlobalOutlined />, color: 'purple', label: '语言能力' },
   日语: { icon: <GlobalOutlined />, color: 'pink', label: '语言能力' },

@@ -308,7 +308,7 @@ const DashboardPage = () => {
         <ul>
           <li>📋 <strong>职位管理</strong>：支持Java开发、销售总监、自动化测试、市场运营、前端开发、产品经理、实施顾问</li>
           <li>🏙️ <strong>城市提取</strong>：从邮件标题、正文、简历内容中自动提取城市信息</li>
-          <li>🎯 <strong>职位判断</strong>：基于三级优先级（邮件标题 > PDF内容 > 技能推断）自动判断应聘职位</li>
+          <li>🎯 <strong>职位判断</strong>：基于三级优先级（邮件标题 {'>'} PDF内容 {'>'} 技能推断）自动判断应聘职位</li>
           <li>🤖 <strong>Agent评分</strong>：根据职位和城市路由到外部Agent进行智能评分（0-100分）</li>
           <li>📊 <strong>结果分类</strong>：
             <ul>
