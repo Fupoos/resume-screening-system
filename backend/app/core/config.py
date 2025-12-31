@@ -55,6 +55,34 @@ class Settings(BaseSettings):
     DEFAULT_IMAP_SERVER: str = "imap.exmail.qq.com"
     DEFAULT_IMAP_PORT: int = 993
 
+    # Agent配置
+    AGENT_API_KEY: str = Field(
+        default="",
+        description="外部Agent API密钥"
+    )
+    AGENT_TIMEOUT: int = Field(
+        default=30,
+        description="Agent调用超时时间（秒）"
+    )
+    AGENT_RETRY_COUNT: int = Field(
+        default=3,
+        description="Agent调用重试次数"
+    )
+    PDF_BASE_URL: str = Field(
+        default="http://localhost:8000",
+        description="PDF文件访问基础URL"
+    )
+
+    # 邮箱监听配置
+    DEMO_EMAIL: str = Field(
+        default="",
+        description="演示邮箱地址"
+    )
+    DEMO_AUTH_CODE: str = Field(
+        default="",
+        description="邮箱授权码"
+    )
+
     class Config:
         env_file = ".env"
         case_sensitive = True

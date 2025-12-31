@@ -102,11 +102,11 @@ async def get_statistics_by_city():
         return {
             (r.city or "未知"): {
                 "total": r.total,
-                "pass": int(r.pass) if r.pass else 0,
+                "pass": int(getattr(r, 'pass')) if getattr(r, 'pass') else 0,
                 "review": int(r.review) if r.review else 0,
                 "reject": int(r.reject) if r.reject else 0,
                 "avg_score": round(float(r.avg_score), 2) if r.avg_score else 0,
-                "pass_rate": round((int(r.pass) / r.total), 3) if r.total and r.total > 0 else 0
+                "pass_rate": round((int(getattr(r, 'pass')) / r.total), 3) if r.total and r.total > 0 else 0
             }
             for r in results
         }
@@ -147,7 +147,7 @@ async def get_statistics_by_job():
         return {
             (r.job_category or "待分类"): {
                 "total": r.total,
-                "pass": int(r.pass) if r.pass else 0,
+                "pass": int(getattr(r, 'pass')) if getattr(r, 'pass') else 0,
                 "review": int(r.review) if r.review else 0,
                 "reject": int(r.reject) if r.reject else 0,
                 "avg_score": round(float(r.avg_score), 2) if r.avg_score else 0
@@ -224,7 +224,7 @@ async def get_statistics_by_time(
         return {
             r.date: {
                 "total": r.total,
-                "pass": int(r.pass) if r.pass else 0,
+                "pass": int(getattr(r, 'pass')) if getattr(r, 'pass') else 0,
                 "review": int(r.review) if r.review else 0,
                 "reject": int(r.reject) if r.reject else 0,
                 "avg_score": round(float(r.avg_score), 2) if r.avg_score else 0
