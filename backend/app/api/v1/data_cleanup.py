@@ -10,7 +10,6 @@ from app.core.database import get_db, SessionLocal
 from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
 from app.services.resume_parser import ResumeParser
-from app.api.v1.jobs import preset_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -201,73 +200,15 @@ async def fix_year_value_anomalies(db: Session = Depends(get_db)) -> Dict[str, A
 
 @router.post("/cleanup-and-rematch")
 async def cleanup_and_rematch(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """完整流程：清理工作年限 + 删除旧筛选结果 + 重新匹配
+    """完整流程：清理工作年限 + 删除旧筛选结果 + 重新匹配 - 已废弃
 
-    返回：
-    - step1: 工作年限清理结果
-    - step2: 删除旧筛选结果
-    - step3: 重新匹配结果
+    ⚠️ 此功能已废弃，违反CLAUDE.md核心原则
+    所有匹配必须通过外部Agent完成，不能使用本地匹配逻辑
     """
-    result = {}
-
-    # ========== 步骤1: 重新计算工作年限 ==========
-    try:
-        # 调用同步函数（不使用await）
-        cleanup_result = recalculate_all_work_years_impl(db)
-        result["step1"] = {
-            "status": "success",
-            "message": cleanup_result["message"],
-            "details": {
-                "total": cleanup_result["total"],
-                "success": cleanup_result["success"],
-                "failed": cleanup_result["failed"]
-            }
-        }
-    except Exception as e:
-        result["step1"] = {
-            "status": "failed",
-            "error": str(e)
-        }
-        raise HTTPException(status_code=500, detail=f"步骤1失败: {str(e)}")
-
-    # ========== 步骤2: 删除所有旧筛选结果 ==========
-    try:
-        deleted_count = db.query(ScreeningResult).delete()
-        db.commit()
-        result["step2"] = {
-            "status": "success",
-            "deleted_count": deleted_count,
-            "message": f"已删除 {deleted_count} 条旧筛选结果"
-        }
-    except Exception as e:
-        db.rollback()
-        result["step2"] = {
-            "status": "failed",
-            "error": str(e)
-        }
-        raise HTTPException(status_code=500, detail=f"步骤2失败: {str(e)}")
-
-    # ========== 步骤3: 重新匹配所有简历 ==========
-    try:
-        match_result = rematch_all_resumes_impl(db)
-        result["step3"] = {
-            "status": "success",
-            "message": f"已重新匹配 {match_result.get('total', 0)} 份简历",
-            "details": match_result
-        }
-    except Exception as e:
-        result["step3"] = {
-            "status": "failed",
-            "error": str(e)
-        }
-        # 不抛出异常，因为前两步已经成功
-
-    result["summary"] = {
-        "status": "complete",
-        "message": "数据清理和重新匹配完成"
-    }
-
-    return result
+    raise HTTPException(
+        status_code=501,
+        detail="此功能已废弃。根据核心原则，所有匹配必须通过外部Agent完成。"
+    )
 
 
 # ========== 辅助函数（同步实现） ==========
@@ -340,89 +281,4 @@ def recalculate_all_work_years_impl(db: Session) -> Dict[str, Any]:
         "errors": errors[:10],
         "message": f"已处理 {total} 份简历，成功 {success} 份，失败 {failed} 份"
     }
-
-
-def rematch_all_resumes_impl(db: Session) -> Dict[str, Any]:
-    """重新匹配所有简历的同步实现"""
-    # 获取所有简历
-    resumes = db.query(Resume).all()
-
-    if not resumes:
-        return {
-            'total': 0,
-            'processed': 0,
-            'failed': 0,
-            'errors': [],
-            'message': '没有简历需要处理'
-        }
-
-    results = {
-        'total': len(resumes),
-        'processed': 0,
-        'failed': 0,
-        'errors': []
-    }
-
-    job_matcher = JobMatcher()
-    logger.info(f"开始重新匹配 {len(resumes)} 份简历")
-
-    for resume in resumes:
-        try:
-            # 构建简历数据
-            resume_dict = {
-                'candidate_name': resume.candidate_name,
-                'phone': resume.phone,
-                'email': resume.email,
-                'education': resume.education,
-                'work_years': resume.work_years or 0,
-                'skills': resume.skills or []
-            }
-
-            # 重新匹配（取前2名）
-            top_matches = job_matcher.auto_match_resume(
-                resume=resume_dict,
-                jobs=preset_jobs,
-                top_n=2
-            )
-
-            # 保存新的筛选结果
-            for match in top_matches:
-                screening = ScreeningResult(
-                    resume_id=resume.id,
-                    job_id=match['job_id'],
-                    match_score=match['match_score'],
-                    skill_score=match['skill_score'],
-                    experience_score=match['experience_score'],
-                    education_score=match['education_score'],
-                    matched_points=match['matched_points'],
-                    unmatched_points=match['unmatched_points'],
-                    screening_result=match['screening_result'],
-                    suggestion=match['suggestion']
-                )
-                db.add(screening)
-
-            db.commit()
-            results['processed'] += 1
-            logger.info(
-                f"简历 {resume.candidate_name} 重新匹配成功， "
-                f"保存了 {len(top_matches)} 个匹配结果"
-            )
-
-        except Exception as e:
-            db.rollback()
-            results['failed'] += 1
-            error_msg = {
-                'resume_id': str(resume.id),
-                'candidate_name': resume.candidate_name,
-                'error': str(e)
-            }
-            results['errors'].append(error_msg)
-            logger.error(f"处理简历 {resume.id} 失败: {e}")
-
-    logger.info(
-        f"重新匹配完成: 总计 {results['total']} 份简历, "
-        f"成功 {results['processed']} 份, 失败 {results['failed']} 份"
-    )
-
-    return results
 

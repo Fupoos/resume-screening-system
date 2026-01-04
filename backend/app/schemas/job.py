@@ -8,7 +8,7 @@ class JobBase(BaseModel):
     """岗位基础模型"""
     name: str = Field(..., description="岗位名称")
     category: str = Field(..., description="岗位类别: hr/software/finance/sales")
-    description: Optional[str] = Field(None, description="岗位描述")
+    description: Optional[str] = Field(None, description="岗位描���")
     required_skills: List[str] = Field(default_factory=list, description="必备技能")
     preferred_skills: List[str] = Field(default_factory=list, description="加分技能")
     min_work_years: int = Field(0, description="最低工作年限")
@@ -18,6 +18,11 @@ class JobBase(BaseModel):
     education_weight: int = Field(20, description="学历权重")
     pass_threshold: int = Field(70, description="PASS阈值")
     review_threshold: int = Field(50, description="REVIEW阈值")
+    # Agent配置
+    agent_type: Optional[str] = Field("http", description="Agent类型: http/fastgpt")
+    agent_url: Optional[str] = Field(None, description="Agent endpoint URL")
+    agent_timeout: int = Field(30, description="超时时间（秒）")
+    agent_retry: int = Field(3, description="重试次数")
 
 
 class JobCreate(JobBase):
@@ -39,6 +44,11 @@ class JobUpdate(BaseModel):
     education_weight: Optional[int] = None
     pass_threshold: Optional[int] = None
     review_threshold: Optional[int] = None
+    # Agent配置
+    agent_type: Optional[str] = None
+    agent_url: Optional[str] = None
+    agent_timeout: Optional[int] = None
+    agent_retry: Optional[int] = None
     is_active: Optional[bool] = None
 
 

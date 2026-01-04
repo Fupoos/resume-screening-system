@@ -14,7 +14,7 @@ from datetime import datetime
 from app.core.database import get_db
 from app.models.screening_result import ScreeningResult
 from app.models.resume import Resume
-from app.api.v1.jobs import preset_jobs
+from app.models.job import Job
 
 router = APIRouter()
 
@@ -164,12 +164,8 @@ async def list_screening_results(
         if not resume:
             continue
 
-        # 获取岗位信息
-        job = None
-        for j in preset_jobs:
-            if str(j['id']) == str(screening.job_id):
-                job = j
-                break
+        # 获取岗位信息（从数据库）
+        job = db.query(Job).filter(Job.id == screening.job_id).first()
 
         evaluated_results_formatted.append({
             "id": str(screening.id),
@@ -179,8 +175,8 @@ async def list_screening_results(
             "candidate_phone": resume.phone,
             "candidate_education": resume.education,
             "job_id": str(screening.job_id),
-            "job_name": job['name'] if job else "未知岗位",
-            "job_category": job['category'] if job else "unknown",
+            "job_name": job.name if job else "未知岗位",
+            "job_category": job.category if job else "unknown",
             "match_score": screening.match_score,
             "skill_score": screening.skill_score,
             "experience_score": screening.experience_score,
@@ -217,12 +213,8 @@ async def get_screening_result(screening_id: UUID, db: Session = Depends(get_db)
     # 获取简历信息
     resume = db.query(Resume).filter(Resume.id == screening.resume_id).first()
 
-    # 获取岗位信息
-    job = None
-    for j in preset_jobs:
-        if str(j.id) == str(screening.job_id):
-            job = j
-            break
+    # 获取岗位信息（从数据库）
+    job = db.query(Job).filter(Job.id == screening.job_id).first()
 
     return {
         "id": str(screening.id),

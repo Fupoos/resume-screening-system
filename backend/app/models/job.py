@@ -32,6 +32,12 @@ class Job(Base):
     pass_threshold = Column(Integer, default=70)  # PASS阈值
     review_threshold = Column(Integer, default=50)  # REVIEW阈值
 
+    # Agent配置
+    agent_type = Column(String(20), default="http")  # Agent类型：http/fastgpt
+    agent_url = Column(String(500))  # Agent endpoint URL
+    agent_timeout = Column(Integer, default=30)  # 超时时间（秒）
+    agent_retry = Column(Integer, default=3)  # 重试次数
+
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

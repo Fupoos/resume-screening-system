@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = '20251231_add_education_level'
-down_revision = '20251231_add_city_agent_pdf_fields'
+down_revision = '002_add_city_agent'
 branch_labels = None
 depends_on = None
 

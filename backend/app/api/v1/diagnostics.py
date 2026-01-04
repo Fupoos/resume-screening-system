@@ -2,14 +2,14 @@
 
 根据CLAUDE.md核心原则：
 - 不使用本地JobMatcher
-- 所有统计仅基于外部Agent结果
+- 所有统��仅基于外部Agent结果
 """
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import func
 from app.core.database import SessionLocal
 from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
-from app.api.v1.jobs import preset_jobs
+from app.models.job import Job
 import logging
 
 logger = logging.getLogger(__name__)
@@ -42,13 +42,14 @@ async def get_matching_statistics():
         # 筛选结果总数
         total_screenings = db.query(func.count(ScreeningResult.id)).scalar()
 
-        # 每个岗位的筛选结果数
+        # 每个岗位的筛选结果数（从数据库）
+        jobs = db.query(Job).filter(Job.is_active == True).all()
         job_screening_counts = {}
-        for job in preset_jobs:
+        for job in jobs:
             count = db.query(ScreeningResult).filter(
-                ScreeningResult.job_id == str(job['id'])
+                ScreeningResult.job_id == job.id
             ).count()
-            job_screening_counts[job['name']] = count
+            job_screening_counts[job.name] = count
 
         # 最近的筛选结果（前5条）
         recent_screenings = db.query(ScreeningResult).order_by(
@@ -84,115 +85,19 @@ async def get_matching_statistics():
 
 @router.post("/rematch-all")
 async def rematch_all_resumes():
-    """重新匹配所有简历
+    """重新匹配所有简历 - 已废弃
 
-    删除所有现有的筛选结果，为每份简历重新匹配所有岗位并保存前2名。
+    ⚠️ 此功能已废弃，违反CLAUDE.md核心原则
+    所有匹配必须通过外部Agent完成，不能使用本地匹配逻辑
 
-    Returns:
-        包含处理结果的字典：
-        - total: 简历总数
-        - processed: 成功处理的简历数
-        - failed: 失败的简历数
-        - errors: 错误列表
+    如需重新匹配，请：
+    1. 调用外部Agent服务对简历进行评估
+    2. 使用Agent返回的结果更新screening_results表
     """
-    db = SessionLocal()
-    try:
-        # 获取所有简历
-        resumes = db.query(Resume).all()
-
-        if not resumes:
-            return {
-                'total': 0,
-                'processed': 0,
-                'failed': 0,
-                'errors': [],
-                'message': '没有简历需要处理'
-            }
-
-        results = {
-            'total': len(resumes),
-            'processed': 0,
-            'failed': 0,
-            'errors': []
-        }
-
-        job_matcher = JobMatcher()
-        logger.info(f"开始重新匹配 {len(resumes)} 份简历")
-
-        for resume in resumes:
-            try:
-                # 删除旧的筛选结果
-                deleted_count = db.query(ScreeningResult).filter(
-                    ScreeningResult.resume_id == resume.id
-                ).delete()
-                logger.info(
-                    f"简历 {resume.candidate_name} (ID: {resume.id}): "
-                    f"删除 {deleted_count} 条旧匹配结果"
-                )
-
-                # 构建简历数据
-                resume_dict = {
-                    'candidate_name': resume.candidate_name,
-                    'phone': resume.phone,
-                    'email': resume.email,
-                    'education': resume.education,
-                    'work_years': resume.work_years or 0,
-                    'skills': resume.skills or []
-                }
-
-                # 重新匹配（取前2名）
-                top_matches = job_matcher.auto_match_resume(
-                    resume=resume_dict,
-                    jobs=preset_jobs,
-                    top_n=2
-                )
-
-                # 保存新的筛选结果
-                for match in top_matches:
-                    screening = ScreeningResult(
-                        resume_id=resume.id,
-                        job_id=match['job_id'],
-                        match_score=match['match_score'],
-                        skill_score=match['skill_score'],
-                        experience_score=match['experience_score'],
-                        education_score=match['education_score'],
-                        matched_points=match['matched_points'],
-                        unmatched_points=match['unmatched_points'],
-                        screening_result=match['screening_result'],
-                        suggestion=match['suggestion']
-                    )
-                    db.add(screening)
-
-                db.commit()
-                results['processed'] += 1
-                logger.info(
-                    f"简历 {resume.candidate_name} 重新匹配成功， "
-                    f"保存了 {len(top_matches)} 个匹配结果"
-                )
-
-            except Exception as e:
-                db.rollback()
-                results['failed'] += 1
-                error_msg = {
-                    'resume_id': str(resume.id),
-                    'candidate_name': resume.candidate_name,
-                    'error': str(e)
-                }
-                results['errors'].append(error_msg)
-                logger.error(f"处理简历 {resume.id} 失败: {e}")
-
-        logger.info(
-            f"重新匹配完成: 总计 {results['total']} 份简历, "
-            f"成功 {results['processed']} 份, 失败 {results['failed']} 份"
-        )
-
-        return results
-
-    except Exception as e:
-        logger.error(f"重新匹配过程出错: {e}")
-        raise HTTPException(status_code=500, detail=f"重新匹配失败: {str(e)}")
-    finally:
-        db.close()
+    raise HTTPException(
+        status_code=501,
+        detail="此功能已废弃。根据核心原则，所有匹配必须通过外部Agent完成。"
+    )
 
 
 @router.get("/resume/{resume_id}/matches")
@@ -217,22 +122,18 @@ async def get_resume_matches(resume_id: str):
             ScreeningResult.resume_id == resume_id
         ).order_by(ScreeningResult.match_score.desc()).all()
 
-        # 组合结果
+        # 组合结果（从数据库获取岗位信息）
         results = []
         for sr in screenings:
-            # 找到对应的岗位
-            job = None
-            for j in preset_jobs:
-                if str(j['id']) == str(sr.job_id):
-                    job = j
-                    break
+            # 从数据库获取岗位信息
+            job = db.query(Job).filter(Job.id == sr.job_id).first()
 
             if job:
                 results.append({
                     'id': str(sr.id),
                     'job_id': str(sr.job_id),
-                    'job_name': job['name'],
-                    'job_category': job['category'],
+                    'job_name': job.name,
+                    'job_category': job.category,
                     'match_score': sr.match_score,
                     'skill_score': sr.skill_score,
                     'experience_score': sr.experience_score,

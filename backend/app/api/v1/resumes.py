@@ -10,7 +10,7 @@ from datetime import datetime
 from app.core.database import get_db
 from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
-from app.api.v1.jobs import preset_jobs
+from app.models.job import Job
 from app.services.resume_parser import ResumeParser
 
 router = APIRouter()
@@ -258,12 +258,8 @@ def get_resume_screenings(
 
     results = []
     for screening in screenings:
-        # 找到对应的岗位信息
-        job = None
-        for j in preset_jobs:
-            if str(j.id) == str(screening.job_id):
-                job = j
-                break
+        # 找到对应的岗位信息（从数据库）
+        job = db.query(Job).filter(Job.id == screening.job_id).first()
 
         results.append({
             "id": str(screening.id),
