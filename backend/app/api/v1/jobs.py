@@ -1,16 +1,19 @@
-"""岗位相关API路由"""
+"""岗位相关API路由
+
+根据CLAUDE.md核心原则：
+- 不使用本地JobMatcher进行匹配
+- 岗位信息仅用于展示和传递给外部Agent
+"""
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 from uuid import UUID
 
 from app.schemas.job import JobCreate, JobUpdate, JobResponse
-from app.services.job_matcher import JobMatcher
 
 router = APIRouter()
 
 # 临时内存存储（后续改为数据库）
 jobs_db = {}
-job_matcher = JobMatcher()
 
 # 预设4种岗位
 preset_jobs = [

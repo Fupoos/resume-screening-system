@@ -48,20 +48,14 @@ const ScreeningPage = () => {
     setLoading(true);
     try {
       const skip = (page - 1) * pageSize;
-      // 只获取已评估且分数 >= 40（绿色和黄色）的简历
+      // 🔴 修改：显示所有符合CLAUDE.md原则2的简历（PDF+正文），包括未评估的
       const data = await getResumes({
-        agent_evaluated: true,
-        min_score: 40,
         skip,
         limit: pageSize,
       });
 
-      // 过滤：只显示已评估的简历
-      const filteredResumes = (data.items || []).filter(
-        (r: AgentEvaluatedResume) => r.agent_score !== null && r.agent_score >= 40
-      );
-
-      setResumes(filteredResumes);
+      // 显示所有简历（包括未评估的）
+      setResumes(data.items || []);
       setPagination({
         current: page,
         pageSize: pageSize,
@@ -88,7 +82,7 @@ const ScreeningPage = () => {
 
   // 获取筛选状态文本
   const getStatusText = (_status: string | null, score: number | null) => {
-    if (score === null) return '未评估';
+    if (score === null) return '待评估';  // 🔴 修改：使用"待评估"而不是"未评估"
     if (score >= 70) return '可以发offer';
     if (score >= 40) return '待定';
     return '不合格';
@@ -216,7 +210,7 @@ const ScreeningPage = () => {
               <span style={{ fontSize: 14, color: '#999', marginLeft: 4 }}>分</span>
             </div>
           ) : (
-            <span style={{ color: '#999' }}>未评估</span>
+            <span style={{ color: '#999' }}>待评估</span>
           )}
         </div>
       ),
@@ -230,7 +224,7 @@ const ScreeningPage = () => {
         const status = record.screening_status;
 
         if (score === null) {
-          return <Tag style={{ fontSize: 12 }}>未评估</Tag>;
+          return <Tag style={{ fontSize: 12 }}>待评估</Tag>;
         }
 
         return (
@@ -279,7 +273,7 @@ const ScreeningPage = () => {
         <div>
           <h2 style={{ margin: 0 }}>筛选结果</h2>
           <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
-            只显示通过FastGPT Agent评估的简历（绿色和黄色）
+            显示所有符合CLAUDE.md原则2的简历（有PDF+正文），包括未评估的简历
           </div>
         </div>
         <Button
@@ -305,7 +299,7 @@ const ScreeningPage = () => {
             showSizeChanger: true,
             pageSizeOptions: ['20', '50', '100', '200'],
             showTotal: (total, range) =>
-              `显示 ${range[0]}-${range[1]} 条，共 ${total} 条通过评估的简历`,
+              `显示 ${range[0]}-${range[1]} 条，共 ${total} 条简历`,
           }}
           onChange={handleTableChange}
           scroll={{ x: 1200 }}

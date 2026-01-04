@@ -172,13 +172,12 @@ class ResumeParser:
                 if result['education']:
                     break
 
-            # 判断最高学历的学校类型
+            # 学历等级判断已删除（违反CLAUDE.md核心原则：不使用本地判断）
+            # school_classifier已删除，所有评估通过外部Agent完成
             if highest_edu_record and highest_edu_record.get('school'):
-                from app.services.school_classifier import get_school_classifier
-                classifier = get_school_classifier()
                 school_name = highest_edu_record.get('school', '')
-                result['education_level'] = classifier.classify(school_name)
-                logger.info(f"学历：{result['education']}，学校：{school_name}，等级：{result.get('education_level', '未知')}")
+                result['education_level'] = None  # 由外部Agent判断
+                logger.info(f"学历：{result['education']}，学校：{school_name}")
 
         # 提取工作经历
         result['work_experience'] = self._extract_work_experience(text)
@@ -268,7 +267,32 @@ class ResumeParser:
             '求职信息', '出生年月', '政治面貌', '工作年限',
             '个人信息', '个人总结', '个人简介', '个人评价', '优势亮点',
             '掌握技能', '资格证书',
-            # 信息字段
+            # 🔴 新增：常见字段标签（这些词被错误识别为姓名）
+            '性别', '手机', '电话', '邮箱', '出生日期', '出生年月', '年龄',
+            '籍贯', '地址', '婚姻状况', '民族', '现居住地', '通讯地址',
+            '邮政编码', '最高学历', '期望薪资', '期望城市', '应聘岗位',
+            '求职信息', '工作年限', '政治面貌',
+            # 🔴 新增第二轮：补充无效名字
+            '同学', '微信号', '手机号', '先生', '女士', '小姐',
+            # 🔴 新增第三轮：更多字段标签
+            '出生年日', '工作时长', '联系电话', '现所在地', '相关课程',
+            '项目描述', '发件人', '实习留用', '综合绩点', '手机号码',
+            '学校住址', '工作地点', '居住地址', '户籍地址', '电子邮箱',
+            '主修专业', '所学专业', '专业名称',
+            # 🔴 新增：常见专业名称（这些被误识别为姓名）
+            '应用化学', '计算机', '财务管理', '市场营销', '工商管理',
+            '信息管理', '软件技术', '网络工程', '电子信息', '机械设计',
+            '土木工程', '材料科学', '生物工程', '环境工程', '化学工程',
+            # 🔴 新增第四轮：更多无效提取结果
+            '意向城市', '户籍', '现居城市', '毕业院校', '英语水平',
+            '英语', '产品运营', '费用报销', '发送时间', '发送日期', '后端开发',
+            '前端开发', '测试开发', '运营管理', '项目管理', '系统架构',
+            '数据分析', '数据管理', '技术支持', '软件开发', '系统设计',
+            # 🔴 新增第五轮：更多字段标签
+            '收件人', '客户成功', '求职类型', '业务支持', '客户服务',
+            '售后服务', '销售支持', '市场支持', '运营支持', '技术总监',
+            '产品总监', '运营总监', '销售经理', '市场经理', '项目经理',
+            # 信息字段（原有）
             '男', '女', '年龄', '电话', '邮箱', '邮箱', '地址', '籍贯',
             '学历', '学位', '专业', '学校', '毕业', '院校',
             # 学历
@@ -291,6 +315,24 @@ class ResumeParser:
             '个人介绍', '基本信息', '专业技能', '主修课程', '获奖情况',
             '证书情况', '语言能力', '计算机能力', '工作内容',
         }
+
+        # 🔴 新增模式：支持带空格的姓名（如"李 晓 斌"）
+        for line in lines[:20]:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 匹配 "李 晓 斌" 或 "李 晓" 格式（姓和名之间有空格）
+            # 支持二到三个字之间有空格
+            match = re.search(r'^([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])(?:\s+([\u4e00-\u9fa5]))?', line)
+            if match:
+                # 提取姓名（去除空格）
+                parts = [g for g in match.groups() if g]
+                name = ''.join(parts)
+                # 验证：2-4个字，且在黑名单之外
+                if 2 <= len(name) <= 4 and self._is_valid_name(name, blacklist):
+                    logger.info(f"从带空格格式提取姓名: {line} → {name}")
+                    return name
 
         # 模式0: 查找行首的姓名（常见格式：姓名 求职意向:xxx）
         for line in lines[:20]:
@@ -532,6 +574,26 @@ class ResumeParser:
         if match:
             name = match.group(1).strip()
             if self._is_valid_name(name, blacklist):
+                return name
+
+        # ========== 🔴 新增模式：职位-姓名-其他（支持复杂分隔符）==========
+        # 例如："张先寿-销售管理&IT项目管理 案例-简历25-12.pdf"
+        # 例如："市场运营助理-Yoana Li 李珮瑶（中）.pdf"
+        match = re.search(r'^([\u4e00-\u9fa5]{2,4})[-—]', basename)
+        if match:
+            name = match.group(1).strip()
+            if self._is_valid_name(name, blacklist):
+                logger.info(f"从文件名提取姓名（职位-姓名格式）: {basename} → {name}")
+                return name
+
+        # ========== 🔴 新增模式：姓名（备注）格式 ==========
+        # 例如："李珮瑶（中）" 或 "李珮瑶(中)"
+        # 例如："张三（男）" 或 "张三(男)"
+        match = re.search(r'^([\u4e00-\u9fa5]{2,4})[（\(][^）\)]*[）\)]', basename)
+        if match:
+            name = match.group(1).strip()
+            if self._is_valid_name(name, blacklist):
+                logger.info(f"从文件名提取姓名（姓名备注格式）: {basename} → {name}")
                 return name
 
         # ========== 模式3: "职位-姓名（备注）"（最常见）==========

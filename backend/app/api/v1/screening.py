@@ -1,4 +1,10 @@
-"""筛选相关API路由"""
+"""筛选相关API路由
+
+根据CLAUDE.md核心原则：
+- 所有筛选结果只来自外部Agent评估
+- 不提供手动匹配功能（已删除POST /match）
+- GET /results只返回有agent_score的简历
+"""
 from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
 from uuid import UUID
@@ -13,51 +19,6 @@ from app.api.v1.jobs import preset_jobs
 router = APIRouter()
 
 
-@router.post("/match")
-async def match_resume(request: dict, db: Session = Depends(get_db)):
-    """匹配简历与岗位（手动匹配，不保存到数据库）"""
-    from app.services.job_matcher import JobMatcher
-    from app.schemas.screening import MatchRequest
-
-    job_matcher = JobMatcher()
-
-    # 查找岗位
-    job = None
-    for j in preset_jobs:
-        if str(j.id) == str(request.get('job_id')):
-            job = j
-            break
-
-    if not job:
-        raise HTTPException(status_code=404, detail="岗位不存在")
-
-    # 构建简历数据
-    resume = {
-        'candidate_name': request.get('candidate_name'),
-        'phone': request.get('phone'),
-        'email': request.get('email'),
-        'education': request.get('education'),
-        'work_years': request.get('work_years') or 0,
-        'skills': request.get('skills', [])
-    }
-
-    # 执行匹配
-    result = job_matcher.match(resume, job.__dict__)
-
-    return {
-        'candidate_name': request.get('candidate_name'),
-        'job_name': job.name,
-        'screening_result': result['screening_result'],
-        'match_score': result['match_score'],
-        'skill_score': result['skill_score'],
-        'experience_score': result['experience_score'],
-        'education_score': result['education_score'],
-        'matched_points': result['matched_points'],
-        'unmatched_points': result['unmatched_points'],
-        'suggestion': result['suggestion']
-    }
-
-
 @router.get("/results")
 async def list_screening_results(
     resume_id: Optional[UUID] = Query(None, description="筛选简历ID"),
@@ -67,31 +28,43 @@ async def list_screening_results(
     limit: int = Query(20, ge=1, le=100, description="返回记录数"),
     db: Session = Depends(get_db)
 ):
-    """获取筛选结果列表（返回所有有正文内容的简历的筛选结果）"""
-    # 构建查询
-    query = db.query(ScreeningResult)
+    """获取筛选结果列表（显示所有PDF+正文简历，包括未评估的）
 
-    if resume_id:
-        query = query.filter(ScreeningResult.resume_id == resume_id)
-    if job_id:
-        query = query.filter(ScreeningResult.job_id == job_id)
-    if result:
-        query = query.filter(ScreeningResult.screening_result == result.upper())
-
-    # 只获取有PDF且有正文内容的简历的筛选结果
-    valid_resume_ids = db.query(Resume.id).filter(
+    根据CLAUDE.md核心原则：
+    - 返回所有符合原则2的简历（file_type='pdf' AND raw_text不为空）
+    - 已评估的简历：显示screening_results数据
+    - 未评估的简历：显示为"待评估"(PENDING)
+    """
+    # 1. 获取所有有效的PDF+正文简历（符合CLAUDE.md原则2）
+    valid_resumes_query = db.query(Resume).filter(
         Resume.file_type == 'pdf',
         Resume.raw_text.isnot(None),
         Resume.raw_text != ''
-    ).all()
+    )
 
-    valid_resume_ids_list = [r.id for r in valid_resume_ids]
+    # 可选过滤：按简历ID
+    if resume_id:
+        valid_resumes_query = valid_resumes_query.filter(Resume.id == resume_id)
 
-    # 过滤筛选结果
-    query = query.filter(ScreeningResult.resume_id.in_(valid_resume_ids_list))
+    valid_resumes = valid_resumes_query.all()
 
-    # 获取所有筛选结果
-    all_screenings = query.order_by(ScreeningResult.created_at.desc()).all()
+    if not valid_resumes:
+        return {"total": 0, "results": []}
+
+    valid_resume_ids = [r.id for r in valid_resumes]
+
+    # 2. 获取screening_results（已评估的简历）
+    screenings_query = db.query(ScreeningResult).filter(
+        ScreeningResult.resume_id.in_(valid_resume_ids)
+    )
+
+    # 可选过滤：按岗位ID和筛选结果
+    if job_id:
+        screenings_query = screenings_query.filter(ScreeningResult.job_id == job_id)
+    if result:
+        screenings_query = screenings_query.filter(ScreeningResult.screening_result == result.upper())
+
+    all_screenings = screenings_query.order_by(ScreeningResult.created_at.desc()).all()
 
     # 过滤掉明显异常的简历名字
     import re
@@ -120,27 +93,27 @@ async def list_screening_results(
 
         return True
 
-    # 获取所有有名字的简历
-    valid_resume_with_names = db.query(Resume.id).filter(
-        Resume.id.in_(valid_resume_ids_list),
-        Resume.candidate_name.isnot(None),
-        Resume.candidate_name != ''
-    ).all()
-
-    # 构建有效简历ID集合（名字正常的）
+    # 4. 构建有效简历ID集合（名字正常的）
     valid_resume_ids_clean = []
-    for r in valid_resume_with_names:
-        resume = db.query(Resume).filter(Resume.id == r.id).first()
-        if resume and is_valid_name(resume.candidate_name):
-            valid_resume_ids_clean.append(r.id)
+    resume_dict = {}  # {resume_id: resume_obj}
 
-    # 再次过滤筛选结果，只保留名字正常的
+    for resume in valid_resumes:
+        if (resume.candidate_name and
+            resume.candidate_name != '' and
+            is_valid_name(resume.candidate_name)):
+            valid_resume_ids_clean.append(resume.id)
+            resume_dict[resume.id] = resume
+
+    # 5. 过滤筛选结果，只保留名字正常的
     all_screenings = [s for s in all_screenings if s.resume_id in valid_resume_ids_clean]
 
-    # 按简历分组，取前2个最佳匹配
+    # 6. 按简历分组，取前2个最佳匹配
     resume_groups = {}
+    resume_ids_with_screenings = set()  # 记录有screening_results的简历ID
+
     for screening in all_screenings:
-        rid = str(screening.resume_id)
+        rid = screening.resume_id
+        resume_ids_with_screenings.add(rid)
         if rid not in resume_groups:
             resume_groups[rid] = []
         resume_groups[rid].append(screening)
@@ -150,19 +123,46 @@ async def list_screening_results(
         resume_groups[rid].sort(key=lambda x: x.match_score, reverse=True)
         resume_groups[rid] = resume_groups[rid][:2]
 
-    # 展平并分页
-    flat_results = []
+    # 7. 展平已评估的筛选结果
+    evaluated_results = []
     for screenings in resume_groups.values():
-        flat_results.extend(screenings)
+        evaluated_results.extend(screenings)
 
-    total = len(flat_results)
-    paginated_results = flat_results[skip:skip + limit]
+    # 8. 🔴 新增：为未评估的简历补充"待评估"记录
+    pending_results = []
+    for resume_id in valid_resume_ids_clean:
+        if resume_id not in resume_ids_with_screenings:
+            resume = resume_dict[resume_id]
+            # 创建一个待评估记录（不保存到数据库）
+            pending_record = {
+                "id": None,  # 没有screening_result ID
+                "resume_id": str(resume_id),
+                "candidate_name": resume.candidate_name,
+                "candidate_email": resume.email,
+                "candidate_phone": resume.phone,
+                "candidate_education": resume.education,
+                "job_id": None,  # 未分配岗位
+                "job_name": resume.job_category or "待分类",
+                "job_category": resume.job_category or "unknown",
+                "match_score": None,
+                "skill_score": None,
+                "experience_score": None,
+                "education_score": None,
+                "screening_result": "PENDING",  # 待评估
+                "matched_points": [],
+                "unmatched_points": [],
+                "suggestion": "待评估" if resume.agent_score is None else "未配置Agent",
+                "evaluated": False,  # 🔴 标记为未评估
+                "created_at": resume.created_at.isoformat() if resume.created_at else None
+            }
+            pending_results.append(pending_record)
 
-    # 转换为响应格式
-    results = []
-    for screening in paginated_results:
-        # 获取简历信息
-        resume = db.query(Resume).filter(Resume.id == screening.resume_id).first()
+    # 9. 转换已评估的筛选结果为响应格式
+    evaluated_results_formatted = []
+    for screening in evaluated_results:
+        resume = resume_dict.get(screening.resume_id)
+        if not resume:
+            continue
 
         # 获取岗位信息
         job = None
@@ -171,13 +171,13 @@ async def list_screening_results(
                 job = j
                 break
 
-        results.append({
+        evaluated_results_formatted.append({
             "id": str(screening.id),
             "resume_id": str(screening.resume_id),
-            "candidate_name": resume.candidate_name if resume else "未知",
-            "candidate_email": resume.email if resume else None,
-            "candidate_phone": resume.phone if resume else None,
-            "candidate_education": resume.education if resume else None,
+            "candidate_name": resume.candidate_name,
+            "candidate_email": resume.email,
+            "candidate_phone": resume.phone,
+            "candidate_education": resume.education,
             "job_id": str(screening.job_id),
             "job_name": job['name'] if job else "未知岗位",
             "job_category": job['category'] if job else "unknown",
@@ -189,12 +189,20 @@ async def list_screening_results(
             "matched_points": screening.matched_points or [],
             "unmatched_points": screening.unmatched_points or [],
             "suggestion": screening.suggestion,
+            "evaluated": True,  # 🔴 标记为已评估
             "created_at": screening.created_at.isoformat() if screening.created_at else None
         })
 
+    # 10. 合并已评估和未评估的结果
+    all_results = evaluated_results_formatted + pending_results
+
+    # 11. 分页
+    total = len(all_results)
+    paginated_results = all_results[skip:skip + limit]
+
     return {
         "total": total,
-        "results": results
+        "results": paginated_results
     }
 
 

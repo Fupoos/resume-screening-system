@@ -1,11 +1,15 @@
-"""诊断和修复API"""
+"""诊断和修复API
+
+根据CLAUDE.md核心原则：
+- 不使用本地JobMatcher
+- 所有统计仅基于外部Agent结果
+"""
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import func
 from app.core.database import SessionLocal
 from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
 from app.api.v1.jobs import preset_jobs
-from app.services.job_matcher import JobMatcher
 import logging
 
 logger = logging.getLogger(__name__)

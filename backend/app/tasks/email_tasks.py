@@ -124,16 +124,18 @@ def process_email(email_info: dict, email_config: dict):
 
 @celery_app.task(name='app.tasks.email_tasks.parse_resume')
 def parse_resume(file_path: str, email_info: dict):
-    """解析简历并保存到数据库（带去重检查）"""
+    """解析简历并保存到数据库（带去重检查）
+
+    根据CLAUDE.md核心原则：
+    - 所有评分通过外部Agent完成
+    - 不使用本地JobMatcher进行匹配
+    - 不使用本地ScreeningClassifier进行分类
+    """
     from app.core.database import SessionLocal
     from app.models.resume import Resume
-    from app.models.screening_result import ScreeningResult
-    from app.services.job_matcher import JobMatcher
-    from app.api.v1.jobs import preset_jobs
     from app.services.city_extractor import CityExtractor
     from app.services.job_title_classifier import JobTitleClassifier
     from app.services.agent_client import AgentClient
-    from app.services.screening_classifier import ScreeningClassifier
 
     logger.info(f"解析简历: {file_path}")
 
@@ -153,7 +155,7 @@ def parse_resume(file_path: str, email_info: dict):
 
         logger.info(f"简历解析完成: {resume_data.get('candidate_name')}")
 
-        # 2. 提取城市（新增）
+        # 2. 提取城市
         city_extractor = CityExtractor()
         city = city_extractor.extract_city(
             email_subject=email_subject,
@@ -162,7 +164,7 @@ def parse_resume(file_path: str, email_info: dict):
         )
         logger.info(f"提取城市: {city or '未知'}")
 
-        # 3. 判断具体职位（新增）
+        # 3. 判断具体职位（使用字符串匹配，不评分）
         job_classifier = JobTitleClassifier()
         job_title = job_classifier.classify_job_title(
             email_subject=email_subject,
@@ -172,7 +174,7 @@ def parse_resume(file_path: str, email_info: dict):
         )
         logger.info(f"判断职位: {job_title}")
 
-        # 4. 调用外部Agent（新增）
+        # 4. 调用外部Agent（唯一评分来源）
         agent_client = AgentClient()
         agent_result = agent_client.evaluate_resume(
             job_title=job_title,
@@ -180,14 +182,22 @@ def parse_resume(file_path: str, email_info: dict):
             pdf_path=file_path,
             resume_data=resume_data
         )
-        logger.info(f"Agent评分: {agent_result['score']}")
 
-        # 5. 分类（新增）
-        screening_classifier = ScreeningClassifier()
-        screening_status = screening_classifier.classify(agent_result['score'])
-        logger.info(f"筛选结果: {screening_status}")
+        # 🔴 新增：处理Agent返回None的情况（未配置FastGPT的职位）
+        if agent_result is None:
+            # 未配置FastGPT，不评分
+            agent_score = None
+            screening_status = 'pending'
+            agent_evaluated_at = None
+            logger.info(f"职位 '{job_title}' 跳过Agent评估（未配置FastGPT）")
+        else:
+            # 成功调用FastGPT
+            agent_score = agent_result['score']
+            screening_status = agent_result.get('screening_status', 'pending')
+            agent_evaluated_at = datetime.utcnow()
+            logger.info(f"Agent评分: {agent_score}")
 
-        # 6. 保存简历到数据库（修改）
+        # 5. 保存简历到数据库
         resume = Resume(
             candidate_name=resume_data.get('candidate_name'),
             phone=resume_data.get('phone'),
@@ -206,13 +216,12 @@ def parse_resume(file_path: str, email_info: dict):
             source_email_id=email_info.get('id'),
             source_email_subject=email_info.get('subject'),
             source_sender=email_info.get('sender'),
-            # 新增字段
             city=city,
             job_category=job_title,
             pdf_path=file_path,
-            agent_score=agent_result['score'],
-            agent_evaluation_id=agent_result.get('evaluation_id'),
-            agent_evaluated_at=datetime.utcnow(),
+            agent_score=agent_score,
+            agent_evaluation_id=agent_result.get('evaluation_id') if agent_result else None,
+            agent_evaluated_at=agent_evaluated_at,
             screening_status=screening_status,
             status='processed'
         )
@@ -222,43 +231,9 @@ def parse_resume(file_path: str, email_info: dict):
 
         logger.info(f"简历已保存到数据库: {resume.id}")
 
-        # 3. 自动匹配所有岗位
-        job_matcher = JobMatcher()
-        resume_dict = {
-            'candidate_name': resume.candidate_name,
-            'phone': resume.phone,
-            'email': resume.email,
-            'education': resume.education,
-            'work_years': resume.work_years or 0,
-            'skills': resume.skills or []
-        }
+        # ❌ 已删除本地JobMatcher自动匹配（违反核心原则）
 
-        top_matches = job_matcher.auto_match_resume(
-            resume=resume_dict,
-            jobs=preset_jobs,  # preset_jobs已经是字典列表
-            top_n=2
-        )
-
-        logger.info(f"自动匹配完成，获得 {len(top_matches)} 个匹配结果")
-
-        # 4. 保存匹配结果
-        for match in top_matches:
-            screening = ScreeningResult(
-                resume_id=resume.id,
-                job_id=match['job_id'],
-                match_score=match['match_score'],
-                skill_score=match['skill_score'],
-                experience_score=match['experience_score'],
-                education_score=match['education_score'],
-                matched_points=match['matched_points'],
-                unmatched_points=match['unmatched_points'],
-                screening_result=match['screening_result'],
-                suggestion=match['suggestion']
-            )
-            db.add(screening)
-
-        db.commit()
-        logger.info(f"简历处理完成: {resume.candidate_name}, 保存了 {len(top_matches)} 个匹配结果")
+        logger.info(f"简历处理完成: {resume.candidate_name}, Agent评分: {agent_result['score']}")
 
     except Exception as e:
         db.rollback()
@@ -526,12 +501,14 @@ def check_new_emails():
 
 @celery_app.task(name='app.tasks.email_tasks.parse_email_body')
 def parse_email_body(email_info: dict, email_config: dict):
-    """解析邮件正文并提取候选人信息"""
+    """解析邮件正文并提取候选人信息
+
+    根据CLAUDE.md核心原则：
+    - 所有评分通过外部Agent完成
+    - 不使用本地JobMatcher进行匹配
+    """
     from app.core.database import SessionLocal
     from app.models.resume import Resume
-    from app.models.screening_result import ScreeningResult
-    from app.services.job_matcher import JobMatcher
-    from app.api.v1.jobs import preset_jobs
     import re
 
     logger.info(f"解析邮件正文: {email_info['subject']}")
@@ -628,7 +605,7 @@ def parse_email_body(email_info: dict, email_config: dict):
         )
         logger.info(f"判断职位: {job_title}")
 
-        # 调用外部Agent（新增）
+        # 调用外部Agent（唯一评分来源）
         # 注意：邮件正文没有PDF文件，所以传递空路径
         resume_data = {
             'candidate_name': candidate_name,
@@ -644,12 +621,20 @@ def parse_email_body(email_info: dict, email_config: dict):
             pdf_path='',  # 邮件正文无PDF
             resume_data=resume_data
         )
-        logger.info(f"Agent评分: {agent_result['score']}")
 
-        # 分类（新增）
-        screening_classifier = ScreeningClassifier()
-        screening_status = screening_classifier.classify(agent_result['score'])
-        logger.info(f"筛选结果: {screening_status}")
+        # 🔴 新增：处理Agent返回None的情况（未配置FastGPT的职位）
+        if agent_result is None:
+            # 未配置FastGPT，不评分
+            agent_score = None
+            screening_status = 'pending'
+            agent_evaluated_at = None
+            logger.info(f"职位 '{job_title}' 跳过Agent评估（未配置FastGPT）")
+        else:
+            # 成功调用FastGPT
+            agent_score = agent_result['score']
+            screening_status = agent_result.get('screening_status', 'pending')
+            agent_evaluated_at = datetime.utcnow()
+            logger.info(f"Agent评分: {agent_score}")
 
         # 保存到数据库（修改）
         resume = Resume(
@@ -674,8 +659,8 @@ def parse_email_body(email_info: dict, email_config: dict):
             city=city,
             job_category=job_title,
             pdf_path='',  # 邮件正文无PDF
-            agent_score=agent_result['score'],
-            agent_evaluation_id=agent_result.get('evaluation_id'),
+            agent_score=agent_score,
+            agent_evaluation_id=agent_result.get('evaluation_id') if agent_result else None,
             agent_evaluated_at=datetime.utcnow(),
             screening_status=screening_status,
             status='processed'
@@ -686,41 +671,9 @@ def parse_email_body(email_info: dict, email_config: dict):
 
         logger.info(f"邮件正文已保存到数据库: {resume.id}")
 
-        # 自动匹配所有岗位
-        job_matcher = JobMatcher()
-        resume_dict = {
-            'candidate_name': resume.candidate_name,
-            'phone': resume.phone,
-            'email': resume.email,
-            'education': resume.education,
-            'work_years': resume.work_years or 0,
-            'skills': []
-        }
+        # ❌ 已删除本地JobMatcher自动匹配（违反核心原则）
 
-        top_matches = job_matcher.auto_match_resume(
-            resume=resume_dict,
-            jobs=preset_jobs,
-            top_n=2
-        )
-
-        # 保存匹配结果
-        for match in top_matches:
-            screening = ScreeningResult(
-                resume_id=resume.id,
-                job_id=match['job_id'],
-                match_score=match['match_score'],
-                skill_score=match['skill_score'],
-                experience_score=match['experience_score'],
-                education_score=match['education_score'],
-                matched_points=match['matched_points'],
-                unmatched_points=match['unmatched_points'],
-                screening_result=match['screening_result'],
-                suggestion=match['suggestion']
-            )
-            db.add(screening)
-
-        db.commit()
-        logger.info(f"邮件正文处理完成: {resume.candidate_name}, 保存了 {len(top_matches)} 个匹配结果")
+        logger.info(f"邮件正文处理完成: {resume.candidate_name}, Agent评分: {agent_result['score']}")
 
     except Exception as e:
         db.rollback()

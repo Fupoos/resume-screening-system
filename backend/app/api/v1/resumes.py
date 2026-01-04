@@ -11,14 +11,12 @@ from app.core.database import get_db
 from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
 from app.api.v1.jobs import preset_jobs
-from app.services.job_matcher import JobMatcher
 from app.services.resume_parser import ResumeParser
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # 初始化服务
-job_matcher = JobMatcher()
 resume_parser = ResumeParser()
 
 # 文件保存目录
@@ -201,53 +199,13 @@ async def upload_resume(
 
         logger.info(f"简历已保存: {resume.id}, 候选人: {resume.candidate_name}")
 
-        # 4. 自动匹配所有岗位
-        top_matches = []
-        if auto_match:
-            logger.info(f"开始自动匹配简历 {resume.id} 与所有岗位")
-
-            # 准备简历数据
-            resume_dict = {
-                'candidate_name': resume.candidate_name,
-                'phone': resume.phone,
-                'email': resume.email,
-                'education': resume.education,
-                'work_years': resume.work_years or 0,
-                'skills': resume.skills or []
-            }
-
-            # 自动匹配所有岗位，取前2名
-            top_matches = job_matcher.auto_match_resume(
-                resume=resume_dict,
-                jobs=preset_jobs,  # preset_jobs已经是字典列表
-                top_n=2
-            )
-
-            # 保存匹配结果
-            for match in top_matches:
-                screening = ScreeningResult(
-                    resume_id=resume.id,
-                    job_id=match['job_id'],
-                    match_score=match['match_score'],
-                    skill_score=match['skill_score'],
-                    experience_score=match['experience_score'],
-                    education_score=match['education_score'],
-                    matched_points=match['matched_points'],
-                    unmatched_points=match['unmatched_points'],
-                    screening_result=match['screening_result'],
-                    suggestion=match['suggestion']
-                )
-                db.add(screening)
-
-            db.commit()
-
-            logger.info(f"自动匹配完成，保存了 {len(top_matches)} 个匹配结果")
+        # 4. ❌ 已删除本地自动匹配功能（违反CLAUDE.md核心原则）
+        # 根据核心原则：所有评分必须通过外部Agent完成
+        # 如果需要自动评估，应该调用外部Agent服务
 
         return {
             "resume_id": str(resume.id),
-            "message": "简历上传成功",
-            "auto_matched": auto_match,
-            "top_matches": top_matches
+            "message": "简历上传成功，等待外部Agent评估"
         }
 
     except HTTPException:

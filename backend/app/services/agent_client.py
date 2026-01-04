@@ -25,7 +25,7 @@ class AgentClient:
         city: Optional[str],
         pdf_path: str,
         resume_data: dict
-    ) -> dict:
+    ) -> Optional[dict]:
         """调用外部agent进行评估
 
         Args:
@@ -40,16 +40,16 @@ class AgentClient:
                 "evaluation_id": "uuid",
                 "details": {...}
             }
+            或 None（如果未配置FastGPT Agent）
 
         Raises:
             Exception: Agent调用失败（会重试3次）
         """
-        # 获取endpoint配置
+        # 🔴 核心：检查职位是否配置了FastGPT endpoint
         endpoint_config = get_endpoint(job_title, city)
-        if not endpoint_config:
-            error_msg = f"未找到职位 '{job_title}' 的Agent配置"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        if not endpoint_config or endpoint_config.get('type') != 'fastgpt':
+            logger.info(f"职位 '{job_title}' 未配置FastGPT Agent，跳过评估")
+            return None
 
         # 根据type选择调用方式
         agent_type = endpoint_config.get("type", "http")
@@ -145,13 +145,9 @@ class AgentClient:
             }
 
         except Exception as e:
-            logger.error(f"HTTP Agent调用失败: {str(e)}")
-            # Agent调用失败，返回默认结果（标记为待定）
-            return {
-                "score": 50,  # 默认50分，标记为待定
-                "evaluation_id": str(uuid.uuid4()),
-                "details": {"error": str(e)}
-            }
+            logger.error(f"FastGPT Agent调用失败: {str(e)}")
+            # 🔴 Agent调用失败，返回None（不评分）
+            return None
 
     def _build_payload(
         self,
