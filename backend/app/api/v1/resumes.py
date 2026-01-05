@@ -95,6 +95,7 @@ def list_resumes(
             "agent_evaluation_id": resume.agent_evaluation_id,
             "screening_status": resume.screening_status,
             "agent_evaluated_at": resume.agent_evaluated_at.isoformat() if resume.agent_evaluated_at else None,
+            "work_experience": resume.work_experience  # 🔴 新增：工作经历
         }
         resume_list.append(resume_dict)
 
@@ -254,7 +255,7 @@ def get_resume_screenings(
     # 获取筛选结果，按分数降序，取前2个
     screenings = db.query(ScreeningResult).filter(
         ScreeningResult.resume_id == resume_id
-    ).order_by(ScreeningResult.match_score.desc()).limit(2).all()
+    ).order_by(ScreeningResult.agent_score.desc().nulls_last()).limit(2).all()
 
     results = []
     for screening in screenings:
@@ -266,10 +267,7 @@ def get_resume_screenings(
             "job_id": str(screening.job_id),
             "job_name": job.name if job else "未知岗位",
             "job_category": job.category if job else "unknown",
-            "match_score": screening.match_score,
-            "skill_score": screening.skill_score,
-            "experience_score": screening.experience_score,
-            "education_score": screening.education_score,
+            "agent_score": screening.agent_score,
             "screening_result": screening.screening_result,
             "matched_points": screening.matched_points or [],
             "unmatched_points": screening.unmatched_points or [],

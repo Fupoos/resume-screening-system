@@ -100,11 +100,16 @@ file_type == 'email_body'
 - **文件位置**: `backend/app/services/agent_client.py`
 - **调用方式**: `AgentClient.evaluate_resume()`
 
+### 数据模型
+- **ScreeningResult 模型**：只保留 `agent_score`（Agent评分 0-100）
+- **已删除字段**：`match_score`, `rule_score`, `similarity_score`, `skill_score`, `experience_score`, `education_score`
+- **Job 模型**：已删除权重字段 `skill_weight`, `experience_weight`, `education_weight`, `pass_threshold`, `review_threshold`
+
 ### 已删除的本地评分模块
 以下模块违反核心原则，已删除：
 
 1. `backend/app/services/job_matcher.py` - 岗位匹配服务
-2. `backend/app/services/screening_classifier.py` - 筛选分类器
+2. `backend/app/services/screening_classifier.py` - 筛选分类器（已从测试文件中移除引用）
 3. `backend/app/services/skill_matcher.py` - 技能匹配器
 4. `backend/app/services/school_classifier.py` - 学校分类器
 5. `backend/app/data/job_titles.py` - 职位数据库（用于本地判断）
@@ -136,6 +141,6 @@ file_type == 'email_body'
 ## 📅 创建与更新日期
 
 **创建日期：2025-12-31**
-**更新日期：2025-12-31** - 添加简历保留规则
+**更新日期：2026-01-05** - 字段统一为 agent_score，删除 match_score 等旧字段
 
 由用户明确要求创建，此文档具有最高优先级，任何代码修改都不得违反此原则。

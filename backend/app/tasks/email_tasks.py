@@ -107,10 +107,9 @@ def process_email(email_info: dict, email_config: dict):
                 # 解析简历
                 parse_resume.delay(file_path, email_info)
 
-        # 如果没有附件但有正文，尝试解析正文
-        if not has_attachments and email_info.get('body'):
-            logger.info(f"尝试解析邮件正文: {email_info['subject'][:50]}...")
-            parse_email_body.delay(email_info, email_config)
+        # 没有PDF附件的邮件跳过处理（符合CLAUDE.md原则2：只保留有PDF+正文的简历）
+        if not has_attachments:
+            logger.info(f"邮件无PDF附件，跳过处理: {email_info['subject'][:50]}...")
 
         # 移动邮件到已处理文件夹
         email_service.move_to_folder(email_info['id'], '已处理')
@@ -152,6 +151,11 @@ def parse_resume(file_path: str, email_info: dict):
         email_subject = email_info.get('subject')
         email_body = email_info.get('body', '')
         resume_data = parser.parse_resume(file_path, email_subject=email_subject)
+
+        # 🔴 验证：确保有正文内容（CLAUDE.md原则2：只保留有PDF+正文的简历）
+        if not resume_data.get('raw_text'):
+            logger.warning(f"简历无正文内容，跳过保存: {file_path}")
+            return
 
         logger.info(f"简历解析完成: {resume_data.get('candidate_name')}")
 
@@ -497,187 +501,3 @@ def check_new_emails():
     except Exception as e:
         logger.error(f"检查新邮件时出错: {e}")
         return {'status': 'error', 'message': f'检查失败: {str(e)}'}
-
-
-@celery_app.task(name='app.tasks.email_tasks.parse_email_body')
-def parse_email_body(email_info: dict, email_config: dict):
-    """解析邮件正文并提取候选人信息
-
-    根据CLAUDE.md核心原则：
-    - 所有评分通过外部Agent完成
-    - 不使用本地JobMatcher进行匹配
-    """
-    from app.core.database import SessionLocal
-    from app.models.resume import Resume
-    import re
-
-    logger.info(f"解析邮件正文: {email_info['subject']}")
-
-    db = SessionLocal()
-    try:
-        # 使用邮件ID作为唯一标识（去重）
-        unique_id = f"email_{email_info['id']}"
-        existing_resume = db.query(Resume).filter(Resume.file_path == unique_id).first()
-        if existing_resume:
-            logger.info(f"邮件正文已处理过，跳过: {email_info['id']}")
-            return
-
-        # 提取正文中的候选人信息
-        body = email_info.get('body', '')
-        subject = email_info.get('subject', '')
-
-        # 使用正则表达式提取候选人姓名
-        candidate_name = None
-
-        # 格式1: BOSS直聘 - "姓名 | X年，应聘 岗位"
-        name_match = re.search(r'^([\u4e00-\u9fa5]{2,4})\s*\|', subject)
-        if name_match:
-            candidate_name = name_match.group(1)
-        else:
-            # 格式2: 实习僧网 - "岗位-姓名-学校"
-            name_match2 = re.search(r'-([\u4e00-\u9fa5]{2,4})-', subject)
-            if name_match2:
-                candidate_name = name_match2.group(1)
-            else:
-                # 格式3: 鱼泡直聘 - "姓名|应聘岗位"
-                name_match3 = re.search(r'^([\u4e00-\u9fa5]{2,4})\|', subject)
-                if name_match3:
-                    candidate_name = name_match3.group(1)
-                else:
-                    # 格式4: 在正文中查找 "姓名 |"
-                    name_match4 = re.search(r'([\u4e00-\u9fa5]{2,4})\s*\|', body[:500])
-                    if name_match4:
-                        # 过滤掉一些常见的关键词
-                        name = name_match4.group(1)
-                        if name not in ['销售总监', '零售行业', '垂直平台', '财务实施', '市场运营', '销售代表']:
-                            candidate_name = name
-
-        # 提取手机号（优先在正文找）
-        phone_match = re.search(r'1[3-9]\d{9}', body)
-        phone = phone_match.group(0) if phone_match else None
-
-        # 提取邮箱
-        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', body)
-        email_addr = email_match.group(0) if email_match else None
-
-        # 提取工作经验（例如："1年"，"2年以上"，"25年应届生"）
-        experience_match = re.search(r'(\d+)\s*年', subject)
-        if experience_match:
-            work_years = int(experience_match.group(1))
-        else:
-            experience_match2 = re.search(r'(\d+)\s*年', body)
-            work_years = int(experience_match2.group(1)) if experience_match2 else 0
-
-        # 如果是应届生，工作经验设为0
-        if '应届' in subject or '应届' in body:
-            work_years = 0
-
-        # 提取应聘岗位
-        job_match = re.search(r'应聘\s*([^\s|【]+)', subject)
-        target_position = job_match.group(1) if job_match else None
-
-        logger.info(f"提取候选人信息: 姓名={candidate_name}, 手机={phone}, 邮箱={email_addr}, 工作经验={work_years}年")
-
-        # 提取技能（使用ResumeParser）
-        from app.services.resume_parser import ResumeParser
-        parser = ResumeParser()
-        email_body_full = body[:10000]  # 使用前10000字符提取技能
-        extracted_skills = parser._extract_skills(email_body_full)
-
-        logger.info(f"从邮件正文提取到 {len(extracted_skills)} 个技能: {extracted_skills[:10]}")
-
-        # 提取城市（新增）
-        city_extractor = CityExtractor()
-        city = city_extractor.extract_city(
-            email_subject=subject,
-            email_body=body,
-            resume_text=body[:5000]
-        )
-        logger.info(f"提取城市: {city or '未知'}")
-
-        # 判断具体职位（新增）
-        job_classifier = JobTitleClassifier()
-        job_title = job_classifier.classify_job_title(
-            email_subject=subject,
-            resume_text=body[:5000],
-            skills=extracted_skills,
-            skills_by_level={}
-        )
-        logger.info(f"判断职位: {job_title}")
-
-        # 调用外部Agent（唯一评分来源）
-        # 注意：邮件正文没有PDF文件，所以传递空路径
-        resume_data = {
-            'candidate_name': candidate_name,
-            'phone': phone,
-            'email': email_addr,
-            'skills': extracted_skills,
-            'raw_text': body[:5000]
-        }
-        agent_client = AgentClient()
-        agent_result = agent_client.evaluate_resume(
-            job_title=job_title,
-            city=city,
-            pdf_path='',  # 邮件正文无PDF
-            resume_data=resume_data
-        )
-
-        # 🔴 新增：处理Agent返回None的情况（未配置FastGPT的职位）
-        if agent_result is None:
-            # 未配置FastGPT，不评分
-            agent_score = None
-            screening_status = 'pending'
-            agent_evaluated_at = None
-            logger.info(f"职位 '{job_title}' 跳过Agent评估（未配置FastGPT）")
-        else:
-            # 成功调用FastGPT
-            agent_score = agent_result['score']
-            screening_status = agent_result.get('screening_status', 'pending')
-            agent_evaluated_at = datetime.utcnow()
-            logger.info(f"Agent评分: {agent_score}")
-
-        # 保存到数据库（修改）
-        resume = Resume(
-            candidate_name=candidate_name or "未知候选人",
-            phone=phone,
-            email=email_addr,
-            education=None,
-            education_level=None,
-            work_years=work_years,
-            skills=extracted_skills,  # 使用提取的技能
-            skills_by_level={},
-            work_experience=[],
-            project_experience=[],
-            education_history=[],
-            raw_text=body[:5000],  # 保存前5000个字符
-            file_path=unique_id,
-            file_type='email_body',
-            source_email_id=email_info.get('id'),
-            source_email_subject=email_info.get('subject'),
-            source_sender=email_info.get('sender'),
-            # 新增字段
-            city=city,
-            job_category=job_title,
-            pdf_path='',  # 邮件正文无PDF
-            agent_score=agent_score,
-            agent_evaluation_id=agent_result.get('evaluation_id') if agent_result else None,
-            agent_evaluated_at=datetime.utcnow(),
-            screening_status=screening_status,
-            status='processed'
-        )
-        db.add(resume)
-        db.commit()
-        db.refresh(resume)
-
-        logger.info(f"邮件正文已保存到数据库: {resume.id}")
-
-        # ❌ 已删除本地JobMatcher自动匹配（违反核心原则）
-
-        logger.info(f"邮件正文处理完成: {resume.candidate_name}, Agent评分: {agent_result['score']}")
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"解析邮件正文时出错: {e}")
-        raise
-    finally:
-        db.close()

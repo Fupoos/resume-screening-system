@@ -1,20 +1,19 @@
 # 简历智能初筛系统
 
-基于 FastAPI + React 的简历智能初筛系统，支持从企业邮箱自动获取简历，并使用规则引擎进行智能匹配。
+基于 FastAPI + React 的简历智能初筛系统，支持从企业邮箱自动获取简历，并使用外部Agent进行智能评估。
 
 ## 系统功能
 
 ### 已实现功能
-- ✅ **邮箱服务**: 支持企业微信邮箱IMAP连接，自动获取简历附件
+- ✅ **邮箱服务**: 支持企业邮箱IMAP连接，自动获取简历附件
 - ✅ **简历解析**: 支持PDF和DOCX格式，提取候选人关键信息
-- ✅ **规则匹配**: 4种岗位类型（HR、软件、财务、销售）的规则匹配引擎
+- ✅ **Agent评估**: 外部Agent（FastGPT）进行简历评分和筛选
 - ✅ **API接口**: RESTful API，支持岗位管理和简历筛选
+- ✅ **前端界面**: React + TypeScript + Ant Design 管理界面
 
 ### 待开发功能
-- ⏳ **Web界面**: React前端管理界面
-- ⏳ **数据库集成**: PostgreSQL数据持久化
+- ⏳ **更多Agent集成**: 扩展到更多职位类别的Agent
 - ⏳ **用户认证**: JWT登录系统
-- ⏳ **简历管理**: 简历列表和详情查看
 - ⏳ **通知功能**: 企业微信/邮件通知
 
 ## 技术栈
@@ -75,42 +74,26 @@ curl http://localhost:8000/api/v1/jobs/
 - 财务专员 (ID: 00000000-0000-0000-0000-000000000003)
 - 销售代表 (ID: 00000000-0000-0000-0000-000000000004)
 
-#### 3.2 测试简历匹配
+#### 3.2 获取筛选结果
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/screening/match \
-  -H "Content-Type: application/json" \
-  -d '{
-    "candidate_name": "张三",
-    "phone": "13800138000",
-    "email": "zhangsan@example.com",
-    "education": "本科",
-    "work_years": 3,
-    "skills": ["Python", "FastAPI", "React", "MySQL", "Docker"],
-    "job_id": "00000000-0000-0000-0000-000000000002"
-  }'
+curl http://localhost:8000/api/v1/screening/results
 ```
-
-#### 3.3 查看匹配结果
 
 响应示例：
 ```json
 {
-  "candidate_name": "张三",
-  "job_name": "Python后端工程师",
-  "screening_result": "PASS",
-  "match_score": 85,
-  "skill_score": 90,
-  "experience_score": 110,
-  "education_score": 100,
-  "matched_points": [
-    "必备技能匹配: Python, FastAPI",
-    "加分技能: MySQL, Docker",
-    "工作经验满足要求 (3年)",
-    "学历满足要求 (本科)"
-  ],
-  "unmatched_points": [],
-  "suggestion": "候选人符合岗位要求，建议进入面试环节。亮点: 必备技能匹配: Python, FastAPI; 加分技能: MySQL, Docker"
+  "total": 10,
+  "results": [
+    {
+      "id": "uuid",
+      "candidate_name": "张三",
+      "job_name": "实施顾问",
+      "agent_score": 75,
+      "screening_result": "PASS",
+      "evaluated": true
+    }
+  ]
 }
 ```
 
@@ -153,41 +136,25 @@ resume-screening-system/
 - **项目经历**: 项目名称、角色、技术栈
 - **技能标签**: 使用jieba分词提取技能关键词
 
-### 3. 规则匹配引擎
+### 3. 外部Agent评估
 
-针对4种岗位类型实现规则匹配：
+使用外部Agent（FastGPT）进行简历评分：
 
-#### 匹配算法
-```
-总分 = 技能分数 × 50% + 经验分数 × 30% + 学历分数 × 20%
-```
+#### 评分标准
+- **90-100分**: 完全匹配，可以进入面试
+- **70-89分**: 基本匹配，可以考虑面试
+- **50-69分**: 部分匹配，需要进一步评估
+- **0-49分**: 不匹配，不建议面试
 
 #### 筛选结果
-- **PASS**: 总分 ≥ 70，建议进入面试
-- **REVIEW**: 50 ≤ 总分 < 70，建议人工复核
-- **REJECT**: 总分 < 50，不建议面试
+- **PASS**: Agent评分 ≥ 70
+- **REVIEW**: 40 ≤ Agent评分 < 70
+- **REJECT**: Agent评分 < 40
 
-#### 4种岗位预设
-
-**HR岗位**
-- 必备技能: 招聘、培训、绩效管理
-- 最低学历: 大专
-- 最低经验: 1年
-
-**软件开发岗位**
-- 必备技能: Python、Java、JavaScript
-- 最低学历: 本科
-- 最低经验: 2年
-
-**财务岗位**
-- 必备技能: 财务报表、会计、Excel
-- 最低学历: 大专
-- 最低经验: 2年
-
-**销售岗位**
-- 必备技能: 销售、客户开发
-- 最低学历: 大专
-- 最低经验: 1年
+#### 支持的职位类别
+目前支持通过Agent评估的职位：
+- **实施顾问**: 已配置FastGPT Agent
+- 更多职位类别开发中...
 
 ## 环境变量配置
 
@@ -247,36 +214,35 @@ docker-compose restart backend
 - `POST /api/v1/jobs/` - 创建岗位
 - `PUT /api/v1/jobs/{id}` - 更新岗位
 - `DELETE /api/v1/jobs/{id}` - 删除岗位
-- `POST /api/v1/screening/match` - 匹配简历与岗位
+- `GET /api/v1/screening/results` - 获取筛选结果列表
+- `GET /api/v1/resumes/` - 获取简历列表
 
 ## 开发进度
 
 ### 已完成 ✅
 - [x] 项目结构搭建
 - [x] Docker配置
-- [x] 数据库模型设计
+- [x] 数据库模型设计（PostgreSQL）
 - [x] 邮箱服务（IMAP连接）
 - [x] 简历解析服务（PDF/DOCX）
-- [x] 规则匹配引擎（4种岗位）
+- [x] 外部Agent集成（FastGPT）
 - [x] 核心API接口
+- [x] React前端界面
 
 ### 进行中 🚧
-- [ ] 数据库持久化
 - [ ] Celery异步任务集成
 
 ### 待开发 📋
-- [ ] React前端界面
 - [ ] 用户认证系统
-- [ ] 简历管理功能
 - [ ] 邮箱配置管理
 - [ ] 通知功能
 
 ## 注意事项
 
-1. **邮箱配置**: 企业微信邮箱需要使用授权码而非登录密码
+1. **邮箱配置**: 企业邮箱需要使用授权码而非登录密码
 2. **文件格式**: 目前只支持PDF和DOCX格式的简历
-3. **规则匹配**: 使用基于规则的匹配引擎，后续可升级为AI模型
-4. **数据持久化**: 当前使用内存存储，需要配置数据库实现持久化
+3. **Agent评估**: 所有评分通过外部Agent（FastGPT）完成，本地无评分逻辑
+4. **简历保留**: 只保留有PDF附件+正文的简历
 
 ## 常见问题
 

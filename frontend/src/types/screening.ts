@@ -14,10 +14,7 @@ export interface MatchResult {
   candidate_name: string;
   job_name: string;
   screening_result: 'PASS' | 'REVIEW' | 'REJECT';
-  match_score: number;
-  skill_score: number;
-  experience_score: number;
-  education_score: number;
+  agent_score: number;
   matched_points: string[];
   unmatched_points: string[];
   suggestion: string;
@@ -27,10 +24,7 @@ export interface ScreeningResult {
   id: string;
   resume_id: string;
   job_id: string;
-  match_score: number;
-  skill_score: number;
-  experience_score: number;
-  education_score: number;
+  agent_score: number | null;
   screening_result: 'PASS' | 'REVIEW' | 'REJECT';
   matched_points: string[];
   unmatched_points: string[];

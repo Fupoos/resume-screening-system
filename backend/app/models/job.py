@@ -23,15 +23,6 @@ class Job(Base):
     min_work_years = Column(Integer, default=0)  # 最低工作年限
     min_education = Column(String(50), default="大专")  # 最低学历
 
-    # 规则权重配置
-    skill_weight = Column(Integer, default=50)  # 技能权重
-    experience_weight = Column(Integer, default=30)  # 经验权重
-    education_weight = Column(Integer, default=20)  # 学历权重
-
-    # 筛选阈值
-    pass_threshold = Column(Integer, default=70)  # PASS阈值
-    review_threshold = Column(Integer, default=50)  # REVIEW阈值
-
     # Agent配置
     agent_type = Column(String(20), default="http")  # Agent类型：http/fastgpt
     agent_url = Column(String(500))  # Agent endpoint URL

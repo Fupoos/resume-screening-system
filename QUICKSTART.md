@@ -34,55 +34,22 @@ INFO:     Uvicorn running on http://0.0.0.0:8000
 # 确保已安装requests库
 pip install requests
 
-# 运行测试脚本
+# 运行测试脚本（注意：测试的是已废弃的API，仅作参考）
 python test_api.py
 ```
 
-测试脚本会自动测试：
-1. 健康检查
-2. 获取岗位列表
-3. Python后端工程师匹配（应该显示PASS）
-4. HR专员匹配（应该显示PASS）
-5. 财务专员匹配（可能显示REVIEW或REJECT）
-
 ## 四、手动测试API
 
-### 1. 获取岗位列表
+### 1. 获取筛选结果
 
 ```bash
-curl http://localhost:8000/api/v1/jobs/
+curl http://localhost:8000/api/v1/screening/results
 ```
 
-### 2. 测试简历匹配（Python工程师）
+### 2. 获取简历列表
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/screening/match \
-  -H "Content-Type: application/json" \
-  -d '{
-    "candidate_name": "张三",
-    "phone": "13800138000",
-    "email": "zhangsan@example.com",
-    "education": "本科",
-    "work_years": 3,
-    "skills": ["Python", "FastAPI", "React", "MySQL", "Docker"],
-    "job_id": "00000000-0000-0000-0000-000000000002"
-  }'
-```
-
-### 3. 创建自定义岗位
-
-```bash
-curl -X POST http://localhost:8000/api/v1/jobs/ \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "前端工程师",
-    "category": "software",
-    "description": "负责前端页面开发",
-    "required_skills": ["React", "TypeScript", "Ant Design"],
-    "preferred_skills": ["Vue", "Next.js"],
-    "min_work_years": 2,
-    "min_education": "本科"
-  }'
+curl http://localhost:8000/api/v1/resumes/
 ```
 
 ## 五、查看日志

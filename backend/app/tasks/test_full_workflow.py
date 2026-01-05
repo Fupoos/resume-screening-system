@@ -8,7 +8,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from app.core.database import SessionLocal
 from app.models.resume import Resume
 from app.services.agent_client import AgentClient
-from app.services.screening_classifier import ScreeningClassifier
 
 
 def test_full_workflow():
@@ -81,13 +80,18 @@ def test_full_workflow():
         if 'error' in result.get('details', {}):
             print(f"  错误: {result['details']['error']}")
 
-        # 使用ScreeningClassifier进行分类
+        # 根据评分进行分类（由Agent返回）
         print("\n" + "=" * 80)
         print("步骤3: 根据评分进行分类")
         print("=" * 80)
 
-        classifier = ScreeningClassifier()
-        category = classifier.classify(result['score'])
+        score = result['score']
+        if score >= 70:
+            category = "可以发offer"
+        elif score >= 40:
+            category = "待定"
+        else:
+            category = "不合格"
 
         print(f"✓ 分类完成: {category}")
 
@@ -111,7 +115,6 @@ def test_full_workflow():
         print("=" * 80)
 
         # 根据分数显示emoji
-        score = result['score']
         if score >= 70:
             emoji = "🟢"
             status_desc = "可以发offer"

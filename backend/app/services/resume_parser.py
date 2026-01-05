@@ -906,13 +906,49 @@ class ResumeParser:
             r'.*集团.*',  # 包含"集团"
             r'.*银行.*',  # 包含"银行"
             r'.*医院.*',  # 包含"医院"
-            r'.*学校.*',  # 包含"学校"
+            # 🔴 移除".*学校.*"，避免把学校误识别为公司
+        ]
+
+        # 🔴 新增：明显不是工作经历的关键词（专业、课程、学院等）
+        non_work_patterns = [
+            r'.*学院.*',  # 包含"学院"
+            r'.*大学.*',  # 包含"大学"
+            r'.*专业.*',  # 包含"专业"
+            r'.*课程.*',  # 包含"课程"
+            r'.*学习.*',  # 包含"学习"
+            r'.*教学.*',  # 包含"教学"
+            r'.*教育.*',  # 包含"教育"
+            r'.*培训.*',  # 包含"培训"
+            r'.*管理.*',  # 🔴 新增：包含"管理"（如"供应链管理"、"工商管理等"）
+            r'.*工程.*',  # 🔴 新增：包含"工程"（如"应用工程"、"化学工程"等）
+            r'.*科学.*',  # 🔴 新增：包含"科学"（如"计算机科学"等）
+            r'.*技术.*',  # 🔴 新增：包含"技术"（如"应用技术"等）
+            r'.*化学.*',  # 🔴 新增：包含"化学"
+            r'.*数学.*',  # 🔴 新增：包含"数学"
+            r'.*物理.*',  # 🔴 新增：包含"物理"
+            r'.*文学.*',  # 🔴 新增：包含"文学"
+            r'.*会计.*',  # 🔴 新增：包含"会计"（可能是专业）
+            r'.*金融.*',  # 🔴 新增：包含"金融"（可能是专业）
+            r'.*经济.*',  # 🔴 新增：包含"经济"（可能是专业）
+        ]
+
+        # 🔴 新增：常见的专业名称列表（这些明显不是公司名）
+        non_work_majors = [
+            '应用化学', '供应链管理', '工商管理', '计算机科学', '软件工程',
+            '电子信息', '机械工程', '土木工程', '材料科学', '生物工程',
+            '市场营销', '人力资源管理', '财务管理', '会计学', '金融学',
+            '国际贸易', '电子商务', '物流管理', '信息管理', '统计学',
+            '应用数学', '应用物理', '汉语言文学', '英语', '日语',
+            '工商管理', '公共管理', '行政管理', '社会学', '心理学',
         ]
 
         # 职位关键词
         position_keywords = ['工程师', '专员', '经理', '总监', '主管', '助理', '顾问',
                            '开发', '设计', '测试', '运营', '销售', '财务', '人事', '行政',
                            '分析师', '架构师', '产品经理', '执行', 'PM']
+
+        # 🔴 新增：实习相关关键词（这些经历通常不计入工作经验）
+        internship_keywords = ['实习', '兼职', '见习', '实训', '校园']
 
         # 查找工作经历段落（用于确定搜索范围）
         keywords = ['工作经历', '工作经验', '职业经历', '工作']
@@ -1013,8 +1049,29 @@ class ResumeParser:
                 if company_part and any(re.search(p, company_part) for p in company_patterns):
                     company = company_part
 
-            # 创建工作记录（只要有时间和职位/公司名之一就创建）
-            if company or position:
+            # 🔴 新增：检查是否是非工作经历（教育/课程/专业等）
+            is_education_related = False
+            if company:
+                # 检查是否匹配非工作模式
+                if any(re.search(p, company) for p in non_work_patterns):
+                    is_education_related = True
+                # 🔴 新增：检查是否是专业名称
+                if company in non_work_majors:
+                    is_education_related = True
+                # 🔴 新增：检查时间行是否包含教育相关关键词
+                if any(kw in time_line for kw in ['本科', '硕士', '博士', '研究生', '学位']):
+                    is_education_related = True
+
+            if position:
+                if any(kw in position for kw in internship_keywords):
+                    is_education_related = True
+
+            # 🔴 新增：如果时间行本身包含实习/教育关键词，也跳过
+            if any(kw in time_line for kw in internship_keywords + ['教育', '学习', '课程']):
+                is_education_related = True
+
+            # 创建工作记录（过滤掉教育相关和实习经历）
+            if not is_education_related and (company or position):
                 work_entry = {
                     'company': company if company else '',
                     'position': position,

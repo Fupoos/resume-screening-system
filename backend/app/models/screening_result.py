@@ -18,15 +18,8 @@ class ScreeningResult(Base):
     resume_id = Column(UUID(as_uuid=True), nullable=False)
     job_id = Column(UUID(as_uuid=True), nullable=False)
 
-    # 匹配分数
-    match_score = Column(Integer)  # 总分 0-100
-    rule_score = Column(Integer)  # 规则匹配分数
-    similarity_score = Column(Numeric(5, 2))  # 文本相似度分数（预留）
-
-    # 详细分数
-    skill_score = Column(Integer)  # 技能分数
-    experience_score = Column(Integer)  # 经验分数
-    education_score = Column(Integer)  # 学历分数
+    # Agent评估分数
+    agent_score = Column(Integer)  # Agent评分 0-100
 
     # 匹配详情
     matched_points = Column(JSONB, default=list)  # 关键匹配点

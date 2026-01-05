@@ -45,10 +45,7 @@ def test_python_engineer_match():
 
     print(f"\n匹配结果:")
     print(f"  筛选结果: {result['screening_result']}")
-    print(f"  总分: {result['match_score']}")
-    print(f"  技能分数: {result['skill_score']}")
-    print(f"  经验分数: {result['experience_score']}")
-    print(f"  学历分数: {result['education_score']}")
+    print(f"  Agent评分: {result.get('agent_score', 'N/A')}")
 
     print(f"\n  匹配点:")
     for point in result['matched_points']:
@@ -86,7 +83,7 @@ def test_hr_match():
 
     print(f"\n匹配结果:")
     print(f"  筛选结果: {result['screening_result']}")
-    print(f"  总分: {result['match_score']}")
+    print(f"  Agent评分: {result.get('agent_score', 'N/A')}")
     print(f"  建议: {result['suggestion']}")
 
     return result
@@ -114,7 +111,7 @@ def test_weak_candidate():
 
     print(f"\n匹配结果:")
     print(f"  筛选结果: {result['screening_result']}")
-    print(f"  总分: {result['match_score']}")
+    print(f"  Agent评分: {result.get('agent_score', 'N/A')}")
     print(f"  建议: {result['suggestion']}")
 
     return result
@@ -145,9 +142,9 @@ def main():
         print("=" * 60)
         print(f"✅ 所有API测试通过")
         print(f"✅ 岗位管理: {len(jobs)} 个预设岗位")
-        print(f"✅ Python工程师匹配: {result1['screening_result']} ({result1['match_score']}分)")
-        print(f"✅ HR专员匹配: {result2['screening_result']} ({result2['match_score']}分)")
-        print(f"✅ 弱候选筛选: {result3['screening_result']} ({result3['match_score']}分)")
+        print(f"✅ Python工程师匹配: {result1['screening_result']} ({result1.get('agent_score', 'N/A')}分)")
+        print(f"✅ HR专员匹配: {result2['screening_result']} ({result2.get('agent_score', 'N/A')}分)")
+        print(f"✅ 弱候选筛选: {result3['screening_result']} ({result3.get('agent_score', 'N/A')}分)")
         print("\n🎉 前端可以正常使用！访问 http://localhost:3000")
 
     except Exception as e:

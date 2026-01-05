@@ -70,10 +70,7 @@ def test_match_resume():
         print(f"\n匹配结果:")
         print(f"  岗位: {result['job_name']}")
         print(f"  筛选结果: {result['screening_result']}")
-        print(f"  总分: {result['match_score']}")
-        print(f"  技能分数: {result['skill_score']}")
-        print(f"  经验分数: {result['experience_score']}")
-        print(f"  学历分数: {result['education_score']}")
+        print(f"  Agent评分: {result.get('agent_score', 'N/A')}")
         print(f"\n  匹配点:")
         for point in result['matched_points']:
             print(f"    ✓ {point}")
@@ -122,7 +119,7 @@ def test_hr_match():
         print(f"\n匹配结果:")
         print(f"  岗位: {result['job_name']}")
         print(f"  筛选结果: {result['screening_result']}")
-        print(f"  总分: {result['match_score']}")
+        print(f"  Agent评分: {result.get('agent_score', 'N/A')}")
         print(f"\n  建议: {result['suggestion']}")
     else:
         print(f"Error: {response.text}")
@@ -164,7 +161,7 @@ def test_finance_match():
         print(f"\n匹配结果:")
         print(f"  岗位: {result['job_name']}")
         print(f"  筛选结果: {result['screening_result']}")
-        print(f"  总分: {result['match_score']}")
+        print(f"  Agent评分: {result.get('agent_score', 'N/A')}")
         print(f"\n  建议: {result['suggestion']}")
     else:
         print(f"Error: {response.text}")

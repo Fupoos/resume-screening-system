@@ -15,10 +15,7 @@ class ScreeningResponse(BaseModel):
     id: UUID
     resume_id: UUID
     job_id: UUID
-    match_score: int
-    skill_score: int
-    experience_score: int
-    education_score: int
+    agent_score: Optional[int] = None  # Agent评分 0-100
     screening_result: str  # PASS / REVIEW / REJECT
     matched_points: List[str]
     unmatched_points: List[str]

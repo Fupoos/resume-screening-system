@@ -57,11 +57,15 @@ def get_resume_pdf(resume_id: UUID, db: Session = Depends(get_db)):
     # 返回PDF文件
     filename = os.path.basename(pdf_file_path)
 
+    # 对文件名进行URL编码，解决中文文件名导致的HTTP头编码错误
+    from urllib.parse import quote
+    encoded_filename = quote(filename)
+
     return FileResponse(
         path=pdf_file_path,
         media_type='application/pdf',
         filename=filename,
         headers={
-            "Content-Disposition": f"inline; filename=\"{filename}\""
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}"
         }
     )

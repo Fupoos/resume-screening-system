@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from app.core.database import SessionLocal
 from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
+from app.models.job import Job
 from sqlalchemy import and_
 import logging
 
@@ -20,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# 预设岗位列表（与app/data/jobs.py保持一致）
+# 预设岗位列表（已弃用，改用数据库动态查询）
 PRESET_JOBS = [
     {
         'id': '550e8400-e29b-41d4-a716-446655440001',
@@ -63,19 +64,21 @@ def fill_screening_results():
     db = SessionLocal()
 
     try:
-        # 1. 找到实施顾问岗位ID
-        implementation_job = None
-        for job in PRESET_JOBS:
-            if job.get('name') == '实施顾问':
-                implementation_job = job
-                break
+        # 1. 从数据库获取实施顾问岗位（agent_type=fastgpt）
+        implementation_job = db.query(Job).filter(
+            and_(
+                Job.name == '实施顾问',
+                Job.is_active == True,
+                Job.agent_type == 'fastgpt'
+            )
+        ).first()
 
         if not implementation_job:
-            logger.error("❌ 未找到「实施顾问」岗位")
+            logger.error("❌ 未找到「实施顾问」岗位（agent_type=fastgpt）")
             return
 
-        job_id = implementation_job['id']
-        logger.info(f"找到岗位: {implementation_job['name']} (ID: {job_id})")
+        job_id = implementation_job.id
+        logger.info(f"找到岗位: {implementation_job.name} (ID: {job_id})")
 
         # 2. 查找有真实评分的实施顾问简历
         # 条件：
@@ -147,7 +150,7 @@ def fill_screening_results():
             screening = ScreeningResult(
                 resume_id=resume.id,
                 job_id=job_id,
-                match_score=score,
+                agent_score=score,
                 screening_result=screening_result,
                 suggestion=f"Agent评分: {score}分"
             )
@@ -191,13 +194,13 @@ def fill_screening_results():
         ).filter(
             ScreeningResult.job_id == job_id
         ).order_by(
-            ScreeningResult.match_score.desc()
+            ScreeningResult.agent_score.desc().nulls_last()
         ).limit(10).all()
 
         for idx, (screening, resume) in enumerate(top_resumes, 1):
             logger.info(
                 f"  {idx}. {resume.candidate_name} - "
-                f"评分: {screening.match_score}分, "
+                f"评分: {screening.agent_score}分, "
                 f"结果: {screening.screening_result}"
             )
         logger.info("-" * 80)

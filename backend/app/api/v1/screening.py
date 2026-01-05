@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.models.screening_result import ScreeningResult
 from app.models.resume import Resume
 from app.models.job import Job
+from app.services.university_classifier import classify_education_level
 
 router = APIRouter()
 
@@ -28,18 +29,32 @@ async def list_screening_results(
     limit: int = Query(20, ge=1, le=100, description="返回记录数"),
     db: Session = Depends(get_db)
 ):
-    """获取筛选结果列表（显示所有PDF+正文简历，包括未评估的）
+    """获取筛选结果列表（只显示已配置FastGPT Agent的岗位类别）
 
     根据CLAUDE.md核心原则：
-    - 返回所有符合原则2的简历（file_type='pdf' AND raw_text不为空）
+    - 只显示已配置Agent的岗位类别（目前只有实施顾问/consulting）
     - 已评估的简历：显示screening_results数据
     - 未评估的简历：显示为"待评估"(PENDING)
     """
-    # 1. 获取所有有效的PDF+正文简历（符合CLAUDE.md原则2）
+    # 0. 🔴 新增：获取所有已配置FastGPT Agent的岗位类别
+    agent_jobs = db.query(Job).filter(
+        Job.is_active == True,
+        Job.agent_type == 'fastgpt'
+    ).all()
+
+    # 使用Job的name（中文名称）来过滤简历，因为Resume.job_category存储的是中文名称
+    agent_job_names = set(job.name for job in agent_jobs)
+
+    if not agent_job_names:
+        # 如果没有配置FastGPT Agent，返回空结果
+        return {"total": 0, "results": []}
+
+    # 1. 获取所有有效的PDF+正文简历，且job_category在已配置Agent的岗位中
     valid_resumes_query = db.query(Resume).filter(
         Resume.file_type == 'pdf',
         Resume.raw_text.isnot(None),
-        Resume.raw_text != ''
+        Resume.raw_text != '',
+        Resume.job_category.in_(agent_job_names)  # 🔴 新增：只显示已配置Agent的岗位
     )
 
     # 可选过滤：按简历ID
@@ -76,15 +91,41 @@ async def list_screening_results(
         # 排除明显的无效名字
         invalid_patterns = [
             r'^[0-9a-fA-F-]{36}$',  # UUID格式
-            r'^实习|工作|项目|教育|技能|求职|个人|基本信息|联系方式',  # 常见标题
-            r'^双一流|211|985|学士|硕士|博士|本科|大专|高中|中专',  # 学历相关
+
+            # 常见简历标题和关键词（完整匹配或包含）
+            r'实习|工作|项目|教育|技能|求职|个人|基本信息|联系方式',
+
+            # 学历相关
+            r'双一流|211|985|学士|硕士|博士|本科|大专|高中|中专',
+
+            # 证书相关
+            r'证书|资格证|获得证书|职业资格',
+
+            # 成果相关
+            r'成果|业绩|成就|工作成果|项目成果',
+
+            # 自我评价相关
+            r'自我评价|个人简介|个人总结|优势特长',
+
+            # 其他常见无效词
+            r'专业技能|专业特长|核心竞争力|主修课程|语言能力',
+
+            # 🔴 个人属性相关（新增）
+            r'身高|体重|生日|年龄|性别|民族|婚姻|健康状况|政治面貌',
+            r'籍贯|出生地|现居地|现居地址|联系电话|电子邮箱|邮箱地址|电话号码',
+            r'求职意向|期望薪资|到岗时间|工作性质|入职时间|从业背景',
+            r'联系方式|手机号码|手机号|邮箱|邮编|通讯地址',
+
+            # 🔴 其他常见无效词（新增）
+            r'主修|外语水平|计算机能力|兴趣爱好|特长爱好',
+            r'在校经历|社会实践|校园活动|获奖情况',
         ]
         for pattern in invalid_patterns:
             if re.search(pattern, name):
                 return False
 
-        # 长度检查：放宽到1-10个字符
-        if len(name) < 1 or len(name) > 10:
+        # 长度检查：放宽到1-15个字符（支持复姓和少数民族名字）
+        if len(name) < 1 or len(name) > 15:
             return False
 
         # 排除纯英文（但保留中英混合）
@@ -120,7 +161,7 @@ async def list_screening_results(
 
     # 每个简历只保留前2个最佳匹配
     for rid in resume_groups:
-        resume_groups[rid].sort(key=lambda x: x.match_score, reverse=True)
+        resume_groups[rid].sort(key=lambda x: x.agent_score or 0, reverse=True)
         resume_groups[rid] = resume_groups[rid][:2]
 
     # 7. 展平已评估的筛选结果
@@ -133,6 +174,19 @@ async def list_screening_results(
     for resume_id in valid_resume_ids_clean:
         if resume_id not in resume_ids_with_screenings:
             resume = resume_dict[resume_id]
+
+            # 🔴 新增：从简历文本中实时分类学历等级
+            education_level = resume.education_level
+            if not education_level and resume.raw_text:
+                education_level = classify_education_level(resume.raw_text)
+
+            # 获取技能标签（取前3个）
+            skills_list = resume.skills or []
+            if isinstance(skills_list, list):
+                skills_display = skills_list[:3]
+            else:
+                skills_display = []
+
             # 创建一个待评估记录（不保存到数据库）
             pending_record = {
                 "id": None,  # 没有screening_result ID
@@ -141,19 +195,20 @@ async def list_screening_results(
                 "candidate_email": resume.email,
                 "candidate_phone": resume.phone,
                 "candidate_education": resume.education,
+                "education_level": education_level,  # 🔴 新增：学历等级分类
                 "job_id": None,  # 未分配岗位
                 "job_name": resume.job_category or "待分类",
                 "job_category": resume.job_category or "unknown",
-                "match_score": None,
-                "skill_score": None,
-                "experience_score": None,
-                "education_score": None,
+                "agent_score": None,
                 "screening_result": "PENDING",  # 待评估
                 "matched_points": [],
                 "unmatched_points": [],
                 "suggestion": "待评估" if resume.agent_score is None else "未配置Agent",
                 "evaluated": False,  # 🔴 标记为未评估
-                "created_at": resume.created_at.isoformat() if resume.created_at else None
+                "created_at": resume.created_at.isoformat() if resume.created_at else None,
+                "work_years": resume.work_years,  # 🔴 新增：工作年限
+                "work_experience": resume.work_experience,  # 🔴 新增：工作经历
+                "skills": skills_display  # 🔴 新增：技能标签（前3个）
             }
             pending_results.append(pending_record)
 
@@ -167,6 +222,18 @@ async def list_screening_results(
         # 获取岗位信息（从数据库）
         job = db.query(Job).filter(Job.id == screening.job_id).first()
 
+        # 🔴 新增：从简历文本中实时分类学历等级（如果数据库中没有）
+        education_level = resume.education_level
+        if not education_level and resume.raw_text:
+            education_level = classify_education_level(resume.raw_text)
+
+        # 获取技能标签（取前3个）
+        skills_list = resume.skills or []
+        if isinstance(skills_list, list):
+            skills_display = skills_list[:3]
+        else:
+            skills_display = []
+
         evaluated_results_formatted.append({
             "id": str(screening.id),
             "resume_id": str(screening.resume_id),
@@ -174,19 +241,20 @@ async def list_screening_results(
             "candidate_email": resume.email,
             "candidate_phone": resume.phone,
             "candidate_education": resume.education,
+            "education_level": education_level,  # 🔴 新增：学历等级分类
             "job_id": str(screening.job_id),
             "job_name": job.name if job else "未知岗位",
-            "job_category": job.category if job else "unknown",
-            "match_score": screening.match_score,
-            "skill_score": screening.skill_score,
-            "experience_score": screening.experience_score,
-            "education_score": screening.education_score,
+            "job_category": job.name if job else (resume.job_category or "unknown"),  # 🔴 修复：返回中文岗位类别
+            "agent_score": screening.agent_score,
             "screening_result": screening.screening_result,
             "matched_points": screening.matched_points or [],
             "unmatched_points": screening.unmatched_points or [],
             "suggestion": screening.suggestion,
             "evaluated": True,  # 🔴 标记为已评估
-            "created_at": screening.created_at.isoformat() if screening.created_at else None
+            "created_at": screening.created_at.isoformat() if screening.created_at else None,
+            "work_years": resume.work_years,  # 🔴 新增：工作年限
+            "work_experience": resume.work_experience,  # 🔴 新增：工作经历
+            "skills": skills_display  # 🔴 新增：技能标签（前3个）
         })
 
     # 10. 合并已评估和未评估的结果
@@ -228,10 +296,7 @@ async def get_screening_result(screening_id: UUID, db: Session = Depends(get_db)
         "job_id": str(screening.job_id),
         "job_name": job.name if job else "未知岗位",
         "job_category": job.category if job else "unknown",
-        "match_score": screening.match_score,
-        "skill_score": screening.skill_score,
-        "experience_score": screening.experience_score,
-        "education_score": screening.education_score,
+        "agent_score": screening.agent_score,
         "screening_result": screening.screening_result,
         "matched_points": screening.matched_points or [],
         "unmatched_points": screening.unmatched_points or [],

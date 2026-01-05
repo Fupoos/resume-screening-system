@@ -1,26 +1,37 @@
-/** 筛选结果页面 - 显示通过Agent评估的简历（绿色和黄色） */
+/** 筛选结果页面 - 只显示已配置FastGPT Agent的岗位类别（目前只有实施顾问） */
 import { useState, useEffect } from 'react';
 import { Card, Table, Tag, Button, message, Tooltip } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { JOB_CATEGORY_COLORS } from '../../types';
-import { getResumes } from '../../services/api';
+import { getScreeningResults } from '../../services/api';
 
 interface AgentEvaluatedResume {
-  id: string;
+  id: string | null;
+  resume_id: string;
   candidate_name: string | null;
-  phone: string | null;
-  email: string | null;
-  education: string | null;
-  education_level: string | null;
-  work_years: number | null;
-  job_category: string | null;
-  agent_score: number | null;
-  agent_evaluation_id: string | null;
-  screening_status: string | null;
-  agent_evaluated_at: string | null;
-  skills: string[];
-  city: string | null;
+  candidate_email: string | null;
+  candidate_phone: string | null;
+  candidate_education: string | null;
+  education_level?: string | null;  // 🔴 新增：学历等级（985/211/QS前50等）
+  job_id: string | null;
+  job_name: string;
+  job_category: string;
+  agent_score: number | null;  // Agent评分
+  screening_result: string;  // "CAN_HIRE" | "PENDING" | "REJECTED" | "PENDING_REVIEW"
+  matched_points: string[];
+  unmatched_points: string[];
+  suggestion: string;
+  evaluated: boolean;  // 是否已评估
+  created_at: string;
+  // 为了兼容旧代码，添加字段映射
+  phone?: string | null;
+  email?: string | null;
+  work_years?: number | null;
+  skills?: string[];
+  city?: string | null;
+  screening_status?: string | null;  // 映射到screening_result
+  agent_evaluated_at?: string | null;  // 映射到created_at
 }
 
 const ScreeningPage = () => {
@@ -48,21 +59,32 @@ const ScreeningPage = () => {
     setLoading(true);
     try {
       const skip = (page - 1) * pageSize;
-      // 🔴 修改：显示所有符合CLAUDE.md原则2的简历（PDF+正文），包括未评估的
-      const data = await getResumes({
+      // 🔴 修改：调用筛选结果API，只显示已配置FastGPT Agent的岗位类别（目前只有实施顾问）
+      const data = await getScreeningResults({
         skip,
         limit: pageSize,
       });
 
-      // 显示所有简历（包括未评估的）
-      setResumes(data.items || []);
+      // 适配数据格式：results -> items
+      const results = data.results || [];
+
+      // 为了兼容旧代码，添加字段映射
+      const adaptedResults = results.map((item: any) => ({
+        ...item,
+        phone: item.candidate_phone,
+        email: item.candidate_email,
+        screening_status: item.screening_result,  // 用screening_result作为screening_status
+        agent_evaluated_at: item.created_at,  // 用created_at作为agent_evaluated_at
+      }));
+
+      setResumes(adaptedResults);
       setPagination({
         current: page,
         pageSize: pageSize,
         total: data.total || 0,
       });
     } catch (error) {
-      message.error('加载简历列表失败');
+      message.error('加载筛选结果失败');
     } finally {
       setLoading(false);
     }
@@ -82,8 +104,8 @@ const ScreeningPage = () => {
 
   // 获取筛选状态文本
   const getStatusText = (_status: string | null, score: number | null) => {
-    if (score === null) return '待评估';  // 🔴 修改：使用"待评估"而不是"未评估"
-    if (score >= 70) return '可以发offer';
+    if (score === null) return '待评估';
+    if (score >= 70) return '可以进入面试';  // 🔴 修改：从"可以发offer"改为"可以进入面试"
     if (score >= 40) return '待定';
     return '不合格';
   };
@@ -94,20 +116,6 @@ const ScreeningPage = () => {
     if (score >= 70) return '#52c41a';  // 绿色
     if (score >= 40) return '#faad14';  // 黄色
     return '#f5222d';  // 红色
-  };
-
-  // 获取学历等级颜色
-  const getEducationLevelColor = (level: string | null) => {
-    if (!level) return 'default';
-    const colorMap: Record<string, string> = {
-      '985': 'red',
-      '211': 'orange',
-      'QS前50': 'purple',
-      'QS前100': 'blue',
-      'QS前200': 'cyan',
-      '双非': 'default',
-    };
-    return colorMap[level] || 'default';
   };
 
   const columns: ColumnsType<AgentEvaluatedResume> = [
@@ -155,15 +163,14 @@ const ScreeningPage = () => {
       render: (_: any, record: AgentEvaluatedResume) => (
         <div>
           <div style={{ marginBottom: 4 }}>
-            {record.education || '-'}
-            {record.education_level && (
-              <Tag color={getEducationLevelColor(record.education_level)} style={{ marginLeft: 4, fontSize: 11 }}>
-                {record.education_level}
-              </Tag>
-            )}
+            {record.candidate_education && record.education_level ? (
+              <>
+                {record.candidate_education}/{record.education_level}
+              </>
+            ) : record.candidate_education || '-'}
           </div>
           <div style={{ fontSize: 12, color: '#999' }}>
-            {record.work_years || 0} 年工作经验
+            {record.work_years !== undefined ? record.work_years : 0} 年工作经验
           </div>
         </div>
       ),
@@ -172,10 +179,10 @@ const ScreeningPage = () => {
       title: '技能标签',
       dataIndex: 'skills',
       key: 'skills',
-      width: 250,
+      width: 200,
       render: (skills: string[] = []) => {
-        const displaySkills = skills.slice(0, 4);
-        const remainingCount = skills.length - 4;
+        const displaySkills = skills.slice(0, 3);
+        const remainingCount = skills.length - 3;
         return (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {displaySkills.map((skill, index) => (
@@ -184,7 +191,7 @@ const ScreeningPage = () => {
               </Tag>
             ))}
             {remainingCount > 0 && (
-              <Tooltip title={skills.slice(4).join(', ')}>
+              <Tooltip title={skills.slice(3).join(', ')}>
                 <Tag style={{ fontSize: 11, marginBottom: 2 }}>+{remainingCount}</Tag>
               </Tooltip>
             )}
@@ -198,7 +205,7 @@ const ScreeningPage = () => {
       width: 120,
       render: (_: any, record: AgentEvaluatedResume) => (
         <div>
-          {record.agent_score !== null ? (
+          {record.agent_score !== null && record.agent_score !== undefined ? (
             <div style={{ display: 'flex', alignItems: 'center' }}>
               <span style={{
                 fontSize: 24,
@@ -223,13 +230,13 @@ const ScreeningPage = () => {
         const score = record.agent_score;
         const status = record.screening_status;
 
-        if (score === null) {
+        if (score === null || score === undefined) {
           return <Tag style={{ fontSize: 12 }}>待评估</Tag>;
         }
 
         return (
-          <Tag color={getStatusColor(status, score)} style={{ fontSize: 13, fontWeight: 500 }}>
-            {getStatusText(status, score)}
+          <Tag color={getStatusColor(status || null, score)} style={{ fontSize: 13, fontWeight: 500 }}>
+            {getStatusText(status || null, score)}
           </Tag>
         );
       },
@@ -239,7 +246,7 @@ const ScreeningPage = () => {
       dataIndex: 'agent_evaluated_at',
       key: 'agent_evaluated_at',
       width: 160,
-      render: (date: string | null) => {
+      render: (date: string | null | undefined) => {
         if (!date) return '-';
         const d = new Date(date);
         return d.toLocaleString('zh-CN');
@@ -254,7 +261,13 @@ const ScreeningPage = () => {
         <Button
           type="link"
           size="small"
-          onClick={() => handleViewPdf(record.id)}
+          onClick={() => {
+            // 🔴 修复：必须使用resume_id，而不是id（id是screening_result的ID）
+            const resumeId = record.resume_id;
+            if (resumeId) {
+              handleViewPdf(resumeId);
+            }
+          }}
         >
           查看PDF
         </Button>
@@ -273,7 +286,7 @@ const ScreeningPage = () => {
         <div>
           <h2 style={{ margin: 0 }}>筛选结果</h2>
           <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
-            显示所有符合CLAUDE.md原则2的简历（有PDF+正文），包括未评估的简历
+            只显示已配置FastGPT Agent的岗位类别（目前：实施顾问）
           </div>
         </div>
         <Button
@@ -305,7 +318,7 @@ const ScreeningPage = () => {
           scroll={{ x: 1200 }}
           rowClassName={(record) => {
             const score = record.agent_score;
-            if (score === null) return '';
+            if (score === null || score === undefined) return '';
             if (score >= 70) return 'row-pass';
             if (score >= 40) return 'row-review';
             return 'row-reject';

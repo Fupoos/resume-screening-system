@@ -63,7 +63,7 @@ async def get_matching_statistics():
                 'resume_id': str(sr.resume_id),
                 'candidate_name': resume.candidate_name if resume else 'Unknown',
                 'job_id': str(sr.job_id),
-                'match_score': sr.match_score,
+                'agent_score': sr.agent_score,
                 'screening_result': sr.screening_result,
                 'created_at': sr.created_at.isoformat() if sr.created_at else None
             })
@@ -120,7 +120,7 @@ async def get_resume_matches(resume_id: str):
         # 获取匹配结果
         screenings = db.query(ScreeningResult).filter(
             ScreeningResult.resume_id == resume_id
-        ).order_by(ScreeningResult.match_score.desc()).all()
+        ).order_by(ScreeningResult.agent_score.desc().nulls_last()).all()
 
         # 组合结果（从数据库获取岗位信息）
         results = []
@@ -134,10 +134,7 @@ async def get_resume_matches(resume_id: str):
                     'job_id': str(sr.job_id),
                     'job_name': job.name,
                     'job_category': job.category,
-                    'match_score': sr.match_score,
-                    'skill_score': sr.skill_score,
-                    'experience_score': sr.experience_score,
-                    'education_score': sr.education_score,
+                    'agent_score': sr.agent_score,
                     'screening_result': sr.screening_result,
                     'matched_points': sr.matched_points or [],
                     'unmatched_points': sr.unmatched_points or [],

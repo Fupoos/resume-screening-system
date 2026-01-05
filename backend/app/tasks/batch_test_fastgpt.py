@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from app.core.database import SessionLocal
 from app.models.resume import Resume
 from app.services.agent_client import AgentClient
-from app.services.screening_classifier import ScreeningClassifier
 
 
 def batch_test():
@@ -29,7 +28,6 @@ def batch_test():
         print("=" * 80)
 
         agent_client = AgentClient()
-        classifier = ScreeningClassifier()
 
         for idx, resume in enumerate(resumes, 1):
             print(f"\n【简历 {idx}/{len(resumes)}】")
@@ -62,7 +60,13 @@ def batch_test():
             )
 
             # 分类
-            category = classifier.classify(result['score'])
+            score = result['score']
+            if score >= 70:
+                category = "可以发offer"
+            elif score >= 40:
+                category = "待定"
+            else:
+                category = "不合格"
 
             # 保存
             resume.agent_score = result['score']
