@@ -395,8 +395,8 @@ class EmailService:
         # 解码文件名后再判断
         decoded_name = self._decode_filename(filename)
 
-        # 检查文件扩展名
-        resume_extensions = ('.pdf', '.PDF', '.docx', '.DOCX', '.doc', '.DOC')
+        # 检查文件扩展名（只接受PDF格式）
+        resume_extensions = ('.pdf', '.PDF')
         return decoded_name.endswith(resume_extensions)
 
     def _parse_email(self, msg: message.Message, email_id: str) -> Dict:

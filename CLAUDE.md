@@ -35,31 +35,24 @@
 
 ---
 
-### **原则2：只保留有正文+PDF附件的简历**
+### **原则2：只保留有PDF附件的简历**
 
 **原则说明：**
-- 系统**只接受**同时满足以下两个条件的简历：
-  1. 有PDF附件（`file_type='pdf'` 且 `pdf_path` 不为空）
-  2. 有正文内容（`raw_text` 不为空且不为None）
-- **不符合条件的简历必须立即删除**
-- **完全不考虑保留**：邮件正文简历、无正文简历、无PDF简历等
+- 系统**只接受**有PDF附件的简历
+- 接受两种情况：1) PDF+正文 2) 只有PDF无正文
+- **不符合条件的简历必须立即删除**：DOCX、邮件正文简历、无PDF简历等
 
-**保留条件（必须同时满足）：**
+**保留条件：**
 ```python
 file_type == 'pdf'
 AND pdf_path IS NOT NULL
 AND pdf_path != ''
-AND raw_text IS NOT NULL
-AND raw_text != ''
 ```
 
 **删除条件（任一满足即删除）：**
 ```python
--- 无PDF附件
+-- 无PDF附件（DOCX、邮件正文等）
 file_type != 'pdf' OR pdf_path IS NULL
-
--- 无正文内容
-raw_text IS NULL OR raw_text == ''
 
 -- 邮件正文类型
 file_type == 'email_body'
