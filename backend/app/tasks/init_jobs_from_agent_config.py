@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# 7个岗位的默认配置
+# 8个岗位的默认配置
 JOB_DEFAULTS = {
     "Java开发": {
         "category": "software",
@@ -75,11 +75,19 @@ JOB_DEFAULTS = {
         "min_work_years": 2,
         "min_education": "本科",
     },
+    "医药销售": {
+        "category": "sales",
+        "description": "负责医药产品销售和客户维护",
+        "required_skills": ["销售", "客户沟通"],
+        "preferred_skills": ["医药知识", "谈判", "CRM"],
+        "min_work_years": 1,
+        "min_education": "大专",
+    },
 }
 
 
 def sync_jobs_from_agent_config():
-    """从agent_config.py同步7个岗位到数据库"""
+    """从agent_config.py同步岗位到数据库"""
     db = SessionLocal()
 
     try:
@@ -120,11 +128,6 @@ def sync_jobs_from_agent_config():
                 preferred_skills=defaults.get("preferred_skills", []),
                 min_work_years=defaults.get("min_work_years", 0),
                 min_education=defaults.get("min_education", "大专"),
-                skill_weight=50,
-                experience_weight=30,
-                education_weight=20,
-                pass_threshold=70,
-                review_threshold=50,
                 # Agent配置
                 agent_type=agent_type,
                 agent_url=config.get("url"),
@@ -142,7 +145,7 @@ def sync_jobs_from_agent_config():
 
         logger.info("\n" + "=" * 80)
         logger.info(f"同步完成！")
-        logger.info(f"  新增岗位: {syncied_count} 个")
+        logger.info(f"  新增岗位: {synced_count} 个")
         logger.info(f"  跳过岗位: {skipped_count} 个")
         logger.info("=" * 80)
 

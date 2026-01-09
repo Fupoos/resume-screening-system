@@ -170,7 +170,7 @@ const ScreeningPage = () => {
             ) : record.candidate_education || '-'}
           </div>
           <div style={{ fontSize: 12, color: '#999' }}>
-            {record.work_years !== undefined ? record.work_years : 0} 年工作经验
+            {record.work_years != null ? `${record.work_years}年工作经验` : '-'}
           </div>
         </div>
       ),

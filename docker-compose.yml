@@ -48,6 +48,8 @@ services:
       - DEMO_EMAIL=es1@cloudpense.com
       - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
       - FASTGPT_API_KEY=api-lzaV5DY9iZH30L15AZ4gpmlFZCmdulswPhRAnKHexG97iCbVvbFqkwIL5
+      - FASTGPT_API_KEY_RD=api-uqiElk0rKOgdz9HDBg0jLchZ9obvIZYbmI6QPBFuHnhSql5HbGXrsqohCw
+      - FASTGPT_API_KEY_MEDICAL=api-rlvpmsKuCZKolLflO32cODcS3nsvRWRiixtaJZWMhdTFulWBoRxjHcVtbP
       - FASTGPT_BASE_URL=https://ai.cloudpense.com/api
     volumes:
       - ./backend:/app
@@ -72,6 +74,10 @@ services:
       - ENCRYPTION_KEY=your-encryption-key-32-bytes-long-change
       - DEMO_EMAIL=es1@cloudpense.com
       - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
+      - FASTGPT_API_KEY=api-lzaV5DY9iZH30L15AZ4gpmlFZCmdulswPhRAnKHexG97iCbVvbFqkwIL5
+      - FASTGPT_API_KEY_RD=api-uqiElk0rKOgdz9HDBg0jLchZ9obvIZYbmI6QPBFuHnhSql5HbGXrsqohCw
+      - FASTGPT_API_KEY_MEDICAL=api-rlvpmsKuCZKolLflO32cODcS3nsvRWRiixtaJZWMhdTFulWBoRxjHcVtbP
+      - FASTGPT_BASE_URL=https://ai.cloudpense.com/api
     volumes:
       - ./backend:/app
       - resume_files:/app/resume_files
@@ -93,6 +99,10 @@ services:
       - ENCRYPTION_KEY=your-encryption-key-32-bytes-long-change
       - DEMO_EMAIL=es1@cloudpense.com
       - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
+      - FASTGPT_API_KEY=api-lzaV5DY9iZH30L15AZ4gpmlFZCmdulswPhRAnKHexG97iCbVvbFqkwIL5
+      - FASTGPT_API_KEY_RD=api-uqiElk0rKOgdz9HDBg0jLchZ9obvIZYbmI6QPBFuHnhSql5HbGXrsqohCw
+      - FASTGPT_API_KEY_MEDICAL=api-rlvpmsKuCZKolLflO32cODcS3nsvRWRiixtaJZWMhdTFulWBoRxjHcVtbP
+      - FASTGPT_BASE_URL=https://ai.cloudpense.com/api
     volumes:
       - ./backend:/app
       - resume_files:/app/resume_files

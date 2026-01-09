@@ -241,6 +241,60 @@ def delete_resume(resume_id: UUID, db: Session = Depends(get_db)):
     return {"message": "简历已删除"}
 
 
+@router.post("/{resume_id}/reparse", response_model=dict)
+def reparse_resume(
+    resume_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """重新解析简历（使用最新的解析逻辑）
+
+    用于修复历史数据中的工作年限计算问题
+    """
+    resume = db.query(Resume).filter(Resume.id == resume_id).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="简历不存在")
+
+    if not resume.raw_text:
+        raise HTTPException(status_code=400, detail="简历没有原始文本内容，无法重新解析")
+
+    try:
+        # 使用新的解析逻辑重新解析
+        parsed_data = resume_parser._parse_text(
+            resume.raw_text,
+            email_subject=resume.source_email_subject,
+            filename=resume.file_path
+        )
+
+        # 更新工作经历、项目经历、教育背景、工作年限等字段
+        resume.work_experience = parsed_data.get('work_experience', [])
+        resume.project_experience = parsed_data.get('project_experience', [])
+        resume.education_history = parsed_data.get('education_history', [])
+        # 🔴 修复：确保work_years不为None，设为0
+        work_years = parsed_data.get('work_years', 0)
+        resume.work_years = work_years if work_years is not None else 0
+        resume.skills = parsed_data.get('skills', [])
+        resume.skills_by_level = parsed_data.get('skills_by_level', {})
+        resume.updated_at = datetime.now()
+
+        db.commit()
+        db.refresh(resume)
+
+        logger.info(f"简历重新解析成功: {resume.id}, 候选人: {resume.candidate_name}, 工作年限: {resume.work_years}")
+
+        return {
+            "resume_id": str(resume.id),
+            "candidate_name": resume.candidate_name,
+            "work_years": resume.work_years,
+            "work_experience_count": len(resume.work_experience),
+            "message": "简历重新解析成功"
+        }
+
+    except Exception as e:
+        logger.error(f"重新解析简历失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"重新解析失败: {str(e)}")
+
+
 @router.get("/{resume_id}/screenings", response_model=dict)
 def get_resume_screenings(
     resume_id: UUID,

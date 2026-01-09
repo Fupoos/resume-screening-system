@@ -438,8 +438,19 @@ def classify_university(school_name: str) -> str:
     if not school_name:
         return "双非"
 
+    import re
+
     # 标准化学校名称
-    school_clean = school_name.strip().replace("（", "").replace("）", "").replace("(", "").replace(")", "")
+    school_clean = school_name.strip()
+
+    # 移除括号及其内容（如 "(211)"、"（211）"、"985"等标签）
+    # 使用正则同时处理中文和英文括号
+    school_clean = re.sub(r'[()（）][^()（）]*', '', school_clean).strip()
+
+    # 移除末尾的常见标签（可能没有括号的）
+    # 例如：东北农业大学211、清华大学985
+    school_clean = re.sub(r'(985|211|双一流|一流大学|一流学科)$', '', school_clean).strip()
+
     school_lower = school_clean.lower()
 
     # 先通过别名映射获取正式名称

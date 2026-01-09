@@ -47,6 +47,94 @@ class TextCleaner:
         # 5. 去除首尾空白
         text = text.strip()
 
+        # 6. 处理PDF解析导致的单字行问题（如"东\n北\n农\n业"合并为"东北农业"）
+        # 检测连续的单字行并合并
+        lines = text.split('\n')
+        merged_lines = []
+        i = 0
+
+        # 定义不应该被合并的section headers（这些通常是独立的标题）
+        section_headers = {
+            '教育背景', '学习经历', '教育经历', '学历背景',
+            '工作经历', '项目经验', '项目经历', '实习经历', '科研经历',
+            '专业技能', '技能', '联系方式', '自我评价', '个人优势', '获奖情况',
+            '求职意向', '应聘', '意向', '岗位', '职位', '专业背景'
+        }
+
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line:
+                merged_lines.append(line)
+                i += 1
+                continue
+
+            # 如果是section header，不合并，直接添加
+            if line in section_headers:
+                merged_lines.append(line)
+                i += 1
+                continue
+
+            # 检查是否是短行（可能是被拆分的文本）
+            # 短行定义：1-5个字符，且主要是中文/数字/标点
+            is_short_line = (
+                len(line) <= 5 and
+                re.match(r'^[\u4e00-\u9fa5()（）\-/\d.年月]+$', line)
+            )
+
+            if is_short_line:
+                # 向后查看是否还有类似的短行，连续合并
+                merged_text = line
+                j = i + 1
+                # 最多合并20行
+                while j < len(lines) and j < i + 20:
+                    next_line = lines[j].strip()
+                    # 空行停止
+                    if not next_line:
+                        break
+                    # 如果下一行是section header，停止合并
+                    if next_line in section_headers:
+                        break
+                    # 如果下一行也是短行
+                    next_is_short = (
+                        len(next_line) <= 5 and
+                        re.match(r'^[\u4e00-\u9fa5()（）\-/\d.年月]+$', next_line)
+                    )
+                    if next_is_short:
+                        merged_text += next_line
+                        j += 1
+                    else:
+                        # 遇到长行，停止合并
+                        break
+
+                # 如果合并后的文本长度���理（超过6个字符），使用合并版本
+                if len(merged_text) > 6:
+                    merged_lines.append(merged_text)
+                    i = j
+                else:
+                    merged_lines.append(line)
+                    i += 1
+            else:
+                merged_lines.append(line)
+                i += 1
+
+        text = '\n'.join(merged_lines)
+
+        # 7. 移除行首的section header（如"教育背景东北..."变为"东北..."）
+        # 但保留header所在行，因为解析器需要这些来定位段落
+        # 注释掉此功能，因为移除section header会导致解析器找不到段落
+        # section_headers = ['教育背景', '学习经历', '教育经历', '学历背景', '工作经历', '项目经验', '实习经历',
+        #                   '专业技能', '技能', '联系方式', '自我评价', '个人优势', '获奖情况']
+        # lines = text.split('\n')
+        # cleaned_lines = []
+        # for line in lines:
+        #     # 移除行首的section header
+        #     for header in section_headers:
+        #         if line.startswith(header):
+        #             line = line[len(header):].strip()
+        #             break
+        #     cleaned_lines.append(line)
+        # text = '\n'.join(cleaned_lines)
+
         return text
 
     @staticmethod

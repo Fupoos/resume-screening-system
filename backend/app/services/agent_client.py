@@ -5,7 +5,7 @@ import logging
 import httpx
 from typing import Dict, Optional
 
-from app.core.agent_config import get_endpoint, get_api_key, get_pdf_base_url, get_fastgpt_config
+from app.core.agent_config import get_endpoint, get_api_key, get_pdf_base_url, get_fastgpt_config, get_fastgpt_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class AgentClient:
         """初始化Agent客户端"""
         self.api_key = get_api_key()
         self.pdf_base_url = get_pdf_base_url()
-        self.fastgpt_client = None  # 延迟初始化FastGPT客户端
+        self.fastgpt_clients = {}  # 支持多个 API Key 的 FastGPT 客户端（按岗位区分）
 
     def evaluate_resume(
         self,
@@ -76,21 +76,26 @@ class AgentClient:
             评估结果字典
         """
         try:
-            # 延迟初始化FastGPT客户端
-            if not self.fastgpt_client:
-                config = get_fastgpt_config()
-                if not config.get("api_key"):
-                    raise ValueError("FastGPT API密钥未配置，请设置FASTGPT_API_KEY环境变量")
+            # 根据岗位获取对应的 API Key
+            api_key = get_fastgpt_api_key(job_title)
+            if not api_key:
+                raise ValueError(f"岗位 '{job_title}' 未配置 FastGPT API Key")
 
+            base_url = get_fastgpt_config()["base_url"]
+
+            # 使用对应岗位的 API Key 创建/获取客户端
+            client_key = f"fastgpt_{job_title}"
+            if client_key not in self.fastgpt_clients:
                 from app.services.fastgpt_client import FastGPTClient
-                self.fastgpt_client = FastGPTClient(
-                    api_key=config["api_key"],
-                    base_url=config["base_url"]
+                self.fastgpt_clients[client_key] = FastGPTClient(
+                    api_key=api_key,
+                    base_url=base_url
                 )
+                logger.info(f"为岗位 '{job_title}' 创建 FastGPT 客户端")
 
             # 调用FastGPT
             logger.info(f"使用FastGPT评估职位: {job_title}")
-            result = self.fastgpt_client.evaluate_resume(
+            result = self.fastgpt_clients[client_key].evaluate_resume(
                 resume_text=resume_data.get("raw_text", ""),
                 candidate_name=resume_data.get("candidate_name", ""),
                 job_title=job_title

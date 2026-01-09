@@ -20,9 +20,11 @@ AGENT_ENDPOINTS: Dict[str, Dict] = {
 
     # 默认endpoint（fallback）
     "Java开发_default": {
-        "url": os.getenv("AGENT_JAVA_URL", "https://api.example.com/java"),
-        "timeout": int(os.getenv("AGENT_TIMEOUT", "30")),
-        "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
+        "type": "fastgpt",  # 使用FastGPT进行评估
+        "url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api"),
+        "api_key_env": "FASTGPT_API_KEY_RD",  # 使用研发API Key
+        "timeout": int(os.getenv("AGENT_TIMEOUT", "180")),  # 增加到3分钟
+        "retry": int(os.getenv("AGENT_RETRY_COUNT", "2")),  # 减少重试次数
     },
     "销售总监_default": {
         "url": os.getenv("AGENT_SALES_URL", "https://api.example.com/sales-director"),
@@ -30,9 +32,11 @@ AGENT_ENDPOINTS: Dict[str, Dict] = {
         "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
     },
     "自动化测试_default": {
-        "url": os.getenv("AGENT_TEST_URL", "https://api.example.com/automation-test"),
-        "timeout": int(os.getenv("AGENT_TIMEOUT", "30")),
-        "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
+        "type": "fastgpt",  # 使用FastGPT进行评估
+        "url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api"),
+        "api_key_env": "FASTGPT_API_KEY_RD",  # 使用研发API Key
+        "timeout": int(os.getenv("AGENT_TIMEOUT", "180")),  # 增加到3分钟
+        "retry": int(os.getenv("AGENT_RETRY_COUNT", "2")),  # 减少重试次数
     },
     "市场运营_default": {
         "url": os.getenv("AGENT_MARKETING_URL", "https://api.example.com/marketing"),
@@ -40,9 +44,11 @@ AGENT_ENDPOINTS: Dict[str, Dict] = {
         "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
     },
     "前端开发_default": {
-        "url": os.getenv("AGENT_FRONTEND_URL", "https://api.example.com/frontend"),
-        "timeout": int(os.getenv("AGENT_TIMEOUT", "30")),
-        "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
+        "type": "fastgpt",  # 使用FastGPT进行评估
+        "url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api"),
+        "api_key_env": "FASTGPT_API_KEY_RD",  # 使用研发API Key
+        "timeout": int(os.getenv("AGENT_TIMEOUT", "180")),  # 增加到3分钟
+        "retry": int(os.getenv("AGENT_RETRY_COUNT", "2")),  # 减少重试次数
     },
     "产品经理_default": {
         "url": os.getenv("AGENT_PRODUCT_URL", "https://api.example.com/product-manager"),
@@ -52,6 +58,14 @@ AGENT_ENDPOINTS: Dict[str, Dict] = {
     "实施顾问_default": {
         "type": "fastgpt",  # 使用FastGPT进行评估
         "url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api"),
+        "api_key_env": "FASTGPT_API_KEY",  # 使用实施顾问API Key（原有）
+        "timeout": int(os.getenv("AGENT_TIMEOUT", "30")),
+        "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
+    },
+    "医药销售_default": {
+        "type": "fastgpt",  # 使用FastGPT进行评估
+        "url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api"),
+        "api_key_env": "FASTGPT_API_KEY_MEDICAL",  # 使用医药销售API Key
         "timeout": int(os.getenv("AGENT_TIMEOUT", "30")),
         "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
     },
@@ -102,6 +116,22 @@ def get_fastgpt_config() -> Dict[str, str]:
         "api_key": os.getenv("FASTGPT_API_KEY", ""),
         "base_url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api")
     }
+
+
+def get_fastgpt_api_key(job_title: str) -> str:
+    """根据岗位获取对应的 FastGPT API Key
+
+    Args:
+        job_title: 岗位名称（如"Java开发"、"实施顾问"）
+
+    Returns:
+        API密钥字符串
+    """
+    endpoint_config = get_endpoint(job_title)
+    if endpoint_config and endpoint_config.get('type') == 'fastgpt':
+        env_key = endpoint_config.get('api_key_env', 'FASTGPT_API_KEY')
+        return os.getenv(env_key, "")
+    return os.getenv("FASTGPT_API_KEY", "")
 
 
 def get_pdf_base_url() -> str:

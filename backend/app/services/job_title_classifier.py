@@ -200,37 +200,35 @@ class JobTitleClassifier:
                     return job_title
 
         # 策略2: 从工作经历中提取（查找"最近/现任职位"）
-        # 通常格式：2020-至今 | Java开发工程师 | XX公司
+        # 支持多种格式，但不使用全局关键词统计
         work_patterns = [
+            # 格式A: 多行 - "至今"后跟"职位:xxx"
+            # "2025.6--至今\n职位:客户经理" 或 "2023.05 至今\n职位:客户经理"
+            r'\d{4}.\d+.*?至今[\s\S]{0,200}?职位[:：\s]*(.+?)(?:\n|【|公司)',
+            # 格式B: 日期至今 | 职位 (单行)
             r'\d{4}.*?至今.*?[:：|](.+?)(?:[:：|])',
+            # 格式C: 日期现在 | 职位 (单行)
             r'\d{4}.*?现在.*?[:：|](.+?)(?:[:：|])',
-            r'现任[:：\s]*(.+?)(?:\n|$)',
-            r'最近职位[:：\s]*(.+?)(?:\n|$)',
+            # 格式D: 现任/当前职位/最近职位 (显式声明)
+            r'(?:现任|当前职位|最近职位)[:：\s]*(.+?)(?:\n|【|$)',
         ]
 
         for pattern in work_patterns:
-            match = re.search(pattern, text)
+            match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 candidate = match.group(1).strip()
+                # 清理多余的字符（保留中文、英文、数字、空格、横杠、斜杠）
+                candidate = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s\-/]', '', candidate)
+                # 移除明显的公司名/部门名（长度过长或包含特定关键词）
+                if len(candidate) > 20 or any(kw in candidate for kw in ['有限公司', '科技', '股份', '部门', '事业部', '公司规模']):
+                    continue
                 job_title = self._match_job_title(candidate)
                 if job_title:
                     return job_title
 
-        # 策略3: 统计所有职位相关词的出现频率
-        job_counts = {}
-
-        for job_name in self.job_names:
-            compiled_patterns = get_compiled_patterns(job_name)
-            for compiled_pattern in compiled_patterns:
-                count = len(compiled_pattern.findall(text))
-                if count > 0:
-                    job_counts[job_name] = job_counts.get(job_name, 0) + count
-
-        # 如果有统计结果，选择出现次数最多的
-        if job_counts:
-            most_common = max(job_counts.items(), key=lambda x: x[1])
-            if most_common[1] >= 2:  # 至少出现2次
-                return most_common[0]
+        # ❌ 已移除策略3: 全局关键词频率统计
+        # 原因: 会导致工作经历中的无关词汇造成误分类
+        # 例如: "产品测试"会匹配到"自动化测试"的"测试"关键词
 
         return None
 
