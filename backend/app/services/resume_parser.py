@@ -172,12 +172,12 @@ class ResumeParser:
                 if result['education']:
                     break
 
-            # 学历等级判断已删除（违反CLAUDE.md核心原则：不使用本地判断）
-            # school_classifier已删除，所有评估通过外部Agent完成
+            # 使用本地学校分类
             if highest_edu_record and highest_edu_record.get('school'):
+                from app.data.university_database import classify_university
                 school_name = highest_edu_record.get('school', '')
-                result['education_level'] = None  # 由外部Agent判断
-                logger.info(f"学历：{result['education']}，学校：{school_name}")
+                result['education_level'] = classify_university(school_name)
+                logger.info(f"学历：{result['education']}，学校：{school_name}，等级：{result['education_level']}")
 
         # 提取工作经历
         result['work_experience'] = self._extract_work_experience(text)
@@ -267,28 +267,26 @@ class ResumeParser:
             '求职信息', '出生年月', '政治面貌', '工作年限',
             '个人信息', '个人总结', '个人简介', '个人评价', '优势亮点',
             '掌握技能', '资格证书',
-            # 🔴 新增：常见字段标签（这些词被错误识别为姓名）
             '性别', '手机', '电话', '邮箱', '出生日期', '出生年月', '年龄',
             '籍贯', '地址', '婚姻状况', '民族', '现居住地', '通讯地址',
             '邮政编码', '最高学历', '期望薪资', '期望城市', '应聘岗位',
             '求职信息', '工作年限', '政治面貌',
-            # 🔴 新增第二轮：补充无效名字
+            #第二轮：补充无效名字
             '同学', '微信号', '手机号', '先生', '女士', '小姐',
-            # 🔴 新增第三轮：更多字段标签
+            #第三轮：更多字段标签
             '出生年日', '工作时长', '联系电话', '现所在地', '相关课程',
             '项目描述', '发件人', '实习留用', '综合绩点', '手机号码',
             '学校住址', '工作地点', '居住地址', '户籍地址', '电子邮箱',
             '主修专业', '所学专业', '专业名称',
-            # 🔴 新增：常见专业名称（这些被误识别为姓名）
             '应用化学', '计算机', '财务管理', '市场营销', '工商管理',
             '信息管理', '软件技术', '网络工程', '电子信息', '机械设计',
             '土木工程', '材料科学', '生物工程', '环境工程', '化学工程',
-            # 🔴 新增第四轮：更多无效提取结果
+            #第四轮：更多无效提取结果
             '意向城市', '户籍', '现居城市', '毕业院校', '英语水平',
             '英语', '产品运营', '费用报销', '发送时间', '发送日期', '后端开发',
             '前端开发', '测试开发', '运营管理', '项目管理', '系统架构',
             '数据分析', '数据管理', '技术支持', '软件开发', '系统设计',
-            # 🔴 新增第五轮：更多字段标签
+            #第五轮：更多字段标签
             '收件人', '客户成功', '求职类型', '业务支持', '客户服务',
             '售后服务', '销售支持', '市场支持', '运营支持', '技术总监',
             '产品总监', '运营总监', '销售经理', '市场经理', '项目经理',
@@ -316,7 +314,7 @@ class ResumeParser:
             '证书情况', '语言能力', '计算机能力', '工作内容',
         }
 
-        # 🔴 新增模式：支持带空格的姓名（如"李 晓 斌"）
+        #模式：支持带空格的姓名（如"李 晓 斌"）
         for line in lines[:20]:
             line = line.strip()
             if not line:
@@ -576,7 +574,7 @@ class ResumeParser:
             if self._is_valid_name(name, blacklist):
                 return name
 
-        # ========== 🔴 新增模式：职位-姓名-其他（支持复杂分隔符）==========
+        # ========== 职位-姓名-其他（支持复杂分隔符）==========
         # 例如："张先寿-销售管理&IT项目管理 案例-简历25-12.pdf"
         # 例如："市场运营助理-Yoana Li 李珮瑶（中）.pdf"
         match = re.search(r'^([\u4e00-\u9fa5]{2,4})[-—]', basename)
@@ -586,7 +584,7 @@ class ResumeParser:
                 logger.info(f"从文件名提取姓名（职位-姓名格式）: {basename} → {name}")
                 return name
 
-        # ========== 🔴 新增模式：姓名（备注）格式 ==========
+        # ========== 姓名（备注）格式 ==========
         # 例如："李珮瑶（中）" 或 "李珮瑶(中)"
         # 例如："张三（男）" 或 "张三(男)"
         match = re.search(r'^([\u4e00-\u9fa5]{2,4})[（\(][^）\)]*[）\)]', basename)
@@ -651,19 +649,19 @@ class ResumeParser:
         """
         education_list = []
 
-        # 教育背景关键词
-        keywords = ['教育', '学历', '教育背景', '学习经历', '教育经历', '学历背景']
+        # 教育背景关键词（用于定位教育背景段落，不包含"学历"因为"学历"可能出现在数据行中）
+        keywords = ['教育背景', '学习经历', '教育经历', '学历背景', '专业背景']
 
         # 学历关键词（用于提取学历）- 按优先级排序
-        degree_keywords = ['博士研究生', '博士', '硕士研究生', '硕士', '本科', '大专', '专科', '高中', '中专']
+        degree_keywords = ["博士研究生", "博士", "硕士研究生", "硕士", "学士", "本科", "大专", "专科", "高中", "中专"]
 
-        # 学历正则模式（支持括号格式）
+        # 学历正则模式（支持括号格式，包括带前缀的如"(工学硕士)"）
         degree_patterns = [
-            r'\((博士研究生|博士|硕士研究生|硕士|本科|大专|专科|高中|中专)\)',  # (本科)
-            r'（(博士研究生|博士|硕士研究生|硕士|本科|大专|专科|高中|中专)）',  # （本科）
-            r'\s(博士研究生|博士|硕士研究生|硕士|本科|大专|专科|高中|中专)\s',  # 空格包围
-            r'/(博士研究生|博士|硕士研究生|硕士|本科|大专|专科|高中|中专)',  # /本科
-            r'\|(博士研究生|博士|硕士研究生|硕士|本科|大专|专科|高中|中专)',  # |本科
+            r'\((?:[^\)]*?)?(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)\)',  # (本科)或(工学硕士)
+            r'（(?:[^）]*?)?(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)）',  # （本科）或（工学硕士）
+            r'\s(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)\s',  # 空格包围
+            r'/(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)',  # /本科
+            r'\|(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)',  # |本科
         ]
 
         lines = text.split('\n')
@@ -683,11 +681,181 @@ class ResumeParser:
                     break
 
         if start_idx is None:
+            # 后处理：从school字段中提取degree并清理school名称
+            education_list = self._post_process_education(education_list)
             return education_list
 
-        # 解析教育经历
+        # 新增：如果在找到"教育背景"标题，可能教育信息在标题之前（如余惜缘的简历）
+        # 先向前搜索50行，查找教育模式
+        if start_idx > 0 and any(keyword in lines[start_idx] for keyword in keywords):
+            backward_start = max(0, start_idx - 50)
+            processed_school_lines = set()  # 记录已处理的学校行，避免重复
+
+            for j in range(start_idx - 1, backward_start - 1, -1):
+                line = lines[j].strip()
+                if not line:
+                    continue
+
+                # 遇到新段落停止
+                if any(keyword in line for keyword in ['工作经历', '项目经验', '求职意向', '基本信息', '联系方式', '姓名']):
+                    break
+
+                # 检查是否包含学校名（"大学"或"学院"）
+                if '大学' in line or '学院' in line:
+                    # 避免重复处理同一行
+                    if j in processed_school_lines:
+                        continue
+                    processed_school_lines.add(j)
+
+                    education = {
+                        'school': '',
+                        'degree': '',
+                        'major': '',
+                        'duration': ''
+                    }
+
+                    # 优先处理：当前行包含括号格式的学历（如"华东理工大学 工业催化(工学硕士)"）
+                    has_bracket_degree = False
+                    for pattern in degree_patterns:
+                        match = re.search(pattern, line)
+                        if match:
+                            has_bracket_degree = True
+                            education['degree'] = match.group(1)
+                            # 提取括号前的部分（学校 + 专业）
+                            before_paren = re.sub(r'[()（）][^()（）]*', '', line).strip()
+                            # 分离学校名和专业
+                            for uni_kw in ['大学', '学院', 'University', 'College']:
+                                if uni_kw in before_paren:
+                                    idx = before_paren.index(uni_kw)
+                                    if idx + len(uni_kw) < len(before_paren):
+                                        education['school'] = before_paren[:idx + len(uni_kw)].strip()
+                                        education['major'] = before_paren[idx + len(uni_kw):].strip()
+                                    else:
+                                        education['school'] = before_paren.strip()
+                                    break
+                            break
+
+                    # 如果当前行没有括号格式，检查是否是"•"分隔格式
+                    if not has_bracket_degree:
+                        # 检查"学校 • 内设学院 • 专业"格式
+                        if ' • ' in line or ' · ' in line:
+                            parts = re.split(r' [•·|] ', line)
+                            if len(parts) >= 1:
+                                education['school'] = parts[0].strip()
+                                # 查找专业
+                                for i, part in enumerate(parts[1:], 1):
+                                    part = part.strip()
+                                    # 跳过GPA、Rank等非专业信息
+                                    if part.startswith('GPA') or part.startswith('Rank') or ':' in part:
+                                        continue
+                                    # 检查是否看起来像专业名（2-10个汉字，不含"学院"等）
+                                    if '学院' not in part and len(part) >= 2 and len(part) <= 15:
+                                        if re.match(r'^[\u4e00-\u9fa5（）()]+$|^[A-Za-z\s&/]+$', part):
+                                            education['major'] = part
+                                            break
+                        else:
+                            education['school'] = line
+
+                        # 向前搜索duration（从j-1往回找）
+                        for k in range(j - 1, max(0, j - 5), -1):
+                            prev_line = lines[k].strip()
+                            if not prev_line:
+                                continue
+                            # 检查是否包含时间格式
+                            time_match = re.search(r'(\d{4})\s*[-.年—]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', prev_line)
+                            if time_match:
+                                education['duration'] = time_match.group(0)
+                                break
+
+                        # 如果找到了duration，尝试推断degree
+                        if education['duration'] and not education['degree']:
+                            year_match = re.findall(r'(\d{4})', education['duration'])
+                            if len(year_match) == 2:
+                                start_year, end_year = int(year_match[0]), int(year_match[1])
+                                duration_years = end_year - start_year
+                                if duration_years >= 3 and duration_years <= 5:
+                                    education['degree'] = '本科'
+                                elif duration_years >= 1 and duration_years <= 3:
+                                    education['degree'] = '硕士'
+                                elif duration_years >= 5:
+                                    education['degree'] = '博士'
+
+                        # 如果还没有degree，向后搜索（从j+1到start_idx）查找学历和专业
+                        if not education['degree']:
+                            for k in range(j + 1, min(start_idx, len(lines))):  # 只搜索到start_idx（不包括标题行）
+                                next_line = lines[k].strip()
+                                if not next_line:
+                                    continue
+
+                                # 检查是否是新的section
+                                if any(keyword in next_line for keyword in ['工作经历', '项目经验', '求职意向', '基本信息', '联系方式', '资格证书', '技能', '荣誉', '奖项']):
+                                    break
+
+                                # 如果遇到另一个学校行，停止（说明是另一个教育经历）
+                                if ('大学' in next_line or '学院' in next_line) and k != j:
+                                    # 检查这行是否包含括号格式学历
+                                    has_degree = False
+                                    for pattern in degree_patterns:
+                                        if re.search(pattern, next_line):
+                                            has_degree = True
+                                            break
+                                    # 如果没有括号格式学历，可能是另一个独立的学校行，停止
+                                    if not has_degree:
+                                        break
+                                    # 如果有括号格式学历，这是另一个教育经历，停止当前处理的向后搜索
+                                    break
+
+                                # 优先检查：纯学历关键词（如"本科"、"硕士"）
+                                if not education['degree'] and next_line in degree_keywords:
+                                    education['degree'] = next_line
+
+                                # 检查行中是否包含学历关键词（如"本科学历"等）
+                                if not education['degree']:
+                                    for degree in degree_keywords:
+                                        if degree in next_line:
+                                            education['degree'] = degree
+                                            break
+
+                                # 检查括号格式的学历
+                                for pattern in degree_patterns:
+                                    match = re.search(pattern, next_line)
+                                    if match:
+                                        education['degree'] = match.group(1)
+                                        # 提取专业（括号前的部分）
+                                        before_paren = re.sub(r'[()（）][^()（）]*', '', next_line).strip()
+                                        # 如果括号前有内容且不是学校名，作为专业
+                                        if before_paren and before_paren != education['school']:
+                                            education['major'] = before_paren
+                                        break
+
+                                # 提取时间
+                                if not education['duration']:
+                                    time_match = re.search(r'(\d{4})\s*[-.年]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', next_line)
+                                    if time_match:
+                                        education['duration'] = time_match.group(0)
+
+                                # 如果已找到学历，停止向后搜索
+                                if education['degree']:
+                                    break
+
+                    # 如果找到有效的education，添加到列表
+                    if education['school']:
+                        education_list.append(education)
+                        if len(education_list) >= 5:
+                            break
+
+            # 反转列表，使前面的学校排在前面
+            education_list.reverse()
+
+        # 解析教育经历（从start_idx开始向后搜索）
         i = start_idx
+        processed_school_lines_forward = set()  # 记录forward搜索中已处理的学校行，避免重复
         while i < min(start_idx + 100, len(lines)):  # 扩大搜索范围到100行
+            # 跳过纯空格/空行（继续向后搜索）
+            if not lines[i].strip():
+                i += 1
+                continue
+
             line = lines[i].strip()
 
             # 跳过空行和标题行
@@ -695,35 +863,371 @@ class ResumeParser:
                 i += 1
                 continue
 
-            # 遇到新段落，停止
-            if any(keyword in line for keyword in ['工作经历', '项目经验', '技能', '联系方式', '实习经历', '专业技能']):
+            # 遇到新段落，停止（但不包括"实习经历"，因为有些简历的教育信息在实习经历之后）
+            # 注意：不停止"专业技能"/"技能"，因为有些简历的教育信息在专业技能之后
+            if any(keyword in line for keyword in ['工作经历', '项目经验', '联系方式']):
                 break
 
             education = None
 
+            # ========== 模式0: "专业 | 学历" 格式（优先检查，因为可能没有学校）==========
+            if '|' in line:
+                parts = line.split('|')
+                if len(parts) >= 2:
+                    # 检查是否有学历关键词
+                    has_degree = any(deu in parts[1] for deu in degree_keywords)
+                    if has_degree:
+                        education = {
+                            'school': '',
+                            'degree': '',
+                            'major': '',
+                            'duration': ''
+                        }
+                        education['major'] = parts[0].strip()
+                        for degree in degree_keywords:
+                            if degree in parts[1]:
+                                education['degree'] = degree
+                                break
+
+                        # 向前搜索学校（范围：前5行）
+                        if not education['school']:
+                            for j in range(max(0, i - 5), i):
+                                prev_line = lines[j].strip()
+                                if '大学' in prev_line or '学院' in prev_line:
+                                    education['school'] = prev_line
+                                    break
+
+                        # 向前搜索时间
+                        if not education['duration']:
+                            for j in range(max(0, i - 5), i):
+                                prev_line = lines[j].strip()
+                                time_match = re.search(r'(\d{4})\s*[-.年]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', prev_line)
+                                if time_match:
+                                    education['duration'] = time_match.group(0)
+                                    break
+
+            # ========== 模式0b: "学校 / 学历" 格式（优先处理，因为包含"大学"会匹配模式1）==========
+            # 例如："学历 :东北农业大学(211) / 本科" 或 "东北农业大学 / 本科"
+            if '/' in line and ('大学' in line or '学院' in line) and not education:
+                # 检查是否有学历关键词
+                if any(deu in line for deu in degree_keywords):
+                    parts = line.split('/')
+                    if len(parts) >= 2:
+                        # 第一部分是学校（可能包含"学历:"前缀）
+                        school_part = parts[0].strip()
+                        # 去掉"学历:"前缀
+                        school_part = re.sub(r'^学历\s*[:：]\s*', '', school_part)
+                        school_part = re.sub(r'^学校\s*[:：]\s*', '', school_part)
+
+                        education = {
+                            'school': school_part,
+                            'degree': '',
+                            'major': '',
+                            'duration': ''
+                        }
+
+                        # 从第二部分提取学历
+                        for degree in degree_keywords:
+                            if degree in parts[1]:
+                                education['degree'] = degree
+                                break
+
             # ========== 模式1: 学校名独立成行（包含"大学"或"学院"）==========
-            if '大学' in line or '学院' in line:
-                education = {
-                    'school': line,
-                    'degree': '',
-                    'major': '',
-                    'duration': ''
-                }
+            if ('大学' in line or '学院' in line) and not education:
+                # 跳过明显的内设学院（如"经济管理学院"、"外国语学院"等）
+                # 这些通常是大学下属的学院，不是独立的学校
+                skip_keywords = ['经济管理', '外国语', '人文', '理学', '工学', '法学', '医学',
+                                '艺术', '体育', '信息', '软件', '计算机', '电气', '机械',
+                                '土木', '化学', '材料', '生命', '环境', '建筑', '交通']
+                # 跳过非学校的关键词（证书、英语等级、奖项等）
+                # 检查是否包含英语等级相关关键词
+                is_english_level = '英语' in line and ('级' in line or 'CET' in line)
+                # 检查是否包含其他证书/奖项关键词
+                is_certificate = any(kw in line for kw in ['证书', '荣誉', '奖项', '奖学金', '通过',
+                                                           '普通话', '计算机二级', '二级', '四级', '六级'])
+                # 检查是否是真正的大学（如"师范学院"、"财经大学"等）
+                # 而不是内设学院（如"信息工程学院"）
+                real_university_patterns = ['师范', '财经', '政法', '医药', '农业', '林业', '海洋',
+                                           '民族', '体育', '艺术', '外语', '理工', '科技', '工业', '工商',
+                                           '交通', '电力', '石油', '地质', '矿业', '冶金', '化工', '邮电',
+                                           '中医药', '医科大学', '音乐学院', '美术学院']
+                is_real_university = any(pattern in line for pattern in real_university_patterns)
+                # 或者包含"大学"关键字
+                has_university_keyword = '大学' in line
 
-                # 向后查找学历和专业（范围：后10行）
-                for j in range(i + 1, min(i + 11, len(lines))):
-                    next_line = lines[j].strip()
+                # 只有包含"大学"或"学院"但不包含上述非学校关键词才处理
+                should_skip = (
+                    ('学院' in line and any(kw in line for kw in skip_keywords) and
+                     not is_real_university and not has_university_keyword) or
+                    is_english_level or is_certificate
+                )
 
-                    # 空行或新段落，停止
-                    if not next_line:
-                        break
-                    if '大学' in next_line or '学院' in next_line:
-                        break  # 遇到新学校，停止
+                if should_skip:
+                    # 跳过非学校信息
+                    pass
+                else:
+                    education = {
+                        'school': line,  # 初始化为整行，后续会精细化提取
+                        'degree': '',
+                        'major': '',
+                        'duration': ''
+                    }
 
-                    # 提取学历（优先查找包含"/"的行，如"会计 / 硕士"）
+                    # ========== 优先级0: 检查"学校 • 内设学院 • 专业"格式（用•分隔）==========
+                    # 例如：湖州师范学院 • 信息工程学院 • 计算机科学与技术 • GPA: 3.43
+                    if ' • ' in line or ' · ' in line or ' | ' in line:
+                        # 使用分隔符拆分
+                        parts = re.split(r' [•·|] ', line)
+                        if len(parts) >= 1:
+                            # 第一部分通常是学校名
+                            education['school'] = parts[0].strip()
+                            # 查找专业（通常在第3部分或之后）
+                            for i, part in enumerate(parts[1:], 1):
+                                part = part.strip()
+                                # 跳过GPA、Rank等非专业信息
+                                if part.startswith('GPA') or part.startswith('Rank') or ':' in part:
+                                    continue
+                                # 检查是否看起来像专业名（2-10个汉字，不含"学院"等）
+                                if '学院' not in part and len(part) >= 2 and len(part) <= 15:
+                                    if re.match(r'^[\u4e00-\u9fa5（）()]+$|^[A-Za-z\s&/]+$', part):
+                                        education['major'] = part
+                                        break
+
+                        # 向前搜索duration（因为时间通常在学校行之前）
+                        if not education['duration']:
+                            for j in range(i - 1, max(0, i - 5), -1):
+                                prev_line = lines[j].strip()
+                                if not prev_line:
+                                    continue
+                                # 检查是否包含时间格式
+                                time_match = re.search(r'(\d{4})\s*[-.年—]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', prev_line)
+                                if time_match:
+                                    education['duration'] = time_match.group(0)
+                                    break
+
+                        # 如果找到了duration，尝试推断degree
+                        if education['duration'] and not education['degree']:
+                            year_match = re.findall(r'(\d{4})', education['duration'])
+                            if len(year_match) == 2:
+                                start_year, end_year = int(year_match[0]), int(year_match[1])
+                                duration_years = end_year - start_year
+                                if duration_years >= 3 and duration_years <= 5:
+                                    education['degree'] = '本科'
+                                elif duration_years >= 1 and duration_years <= 3:
+                                    education['degree'] = '硕士'
+                                elif duration_years >= 5:
+                                    education['degree'] = '博士'
+
+                    # ========== 优先级1: 检查"专业(学历)"括号格式（如"华东理工大学 专业催化(工学硕士)"）==========
+                    # 使用正则提取括号中的学历（优先级最高，因为更精确）
+                    for pattern in degree_patterns:
+                        match = re.search(pattern, line)
+                        if match:
+                            education['degree'] = match.group(1)
+                            # 提取括号前的部分（学校 + 专业）
+                            # 使用正确的正则：匹配从左括号到右括号之间的内容
+                            before_paren = re.sub(r'[()（）][^()（）]*', '', line).strip()
+                            # 分离学校名和专业：找大学/学院关键字的位置
+                            for uni_kw in ['大学', '学院', 'University', 'College']:
+                                if uni_kw in before_paren:
+                                    idx = before_paren.index(uni_kw)
+                                    # 检查大学关键字后面是否有内容（即专业）
+                                    if idx + len(uni_kw) < len(before_paren):
+                                        potential_major = before_paren[idx + len(uni_kw):].strip()
+                                        # 如果后面的内容看起来像专业名（不含其他学校关键字）
+                                        if potential_major and not any(kw in potential_major for kw in ['大学', '学院', 'University', 'College']):
+                                            education['school'] = before_paren[:idx + len(uni_kw)].strip()
+                                            education['major'] = potential_major
+                                        else:
+                                            education['school'] = before_paren.strip()
+                                    else:
+                                        education['school'] = before_paren.strip()
+                                    break
+                            if education['degree']:
+                                break
+
+                    # ========== 优先级1.5: 检查横杠分隔格式（如"东北农业大学(211)-本科-物联网工程"）==========
+                    # 只有在括号格式未提取到专业时才尝试
+                    if not education['major'] and '-' in line:
+                        parts = line.split('-')
+                        if len(parts) >= 2:
+                            # 第一部分是学校（可能包含标签如(211)）
+                            school_part = parts[0].strip()
+                            # 检查是否有大学/学院关键字
+                            if '大学' in school_part or '学院' in school_part:
+                                education['school'] = school_part
+
+                                # 遍历剩余部分，查找学历和专业
+                                for j in range(1, len(parts)):
+                                    part = parts[j].strip()
+                                    # 检查是否是学历
+                                    if not education['degree']:
+                                        for degree in degree_keywords:
+                                            if degree in part:
+                                                education['degree'] = degree
+                                                # 如果这部分只包含学历，继续查找专业
+                                                if part == degree:
+                                                    continue
+                                                break
+                                    # 如果已找到学历，剩余的可能是专业
+                                    if education['degree'] and not education['major']:
+                                        # 去掉已识别的学历关键词，剩下的可能是专业
+                                        major_part = part
+                                        for degree in degree_keywords:
+                                            if degree in major_part:
+                                                major_part = major_part.replace(degree, '').strip()
+                                                break
+                                        # 如果还有内容且看起来像专业名（2-8个汉字或字母）
+                                        if major_part and len(major_part) >= 2 and len(major_part) <= 15:
+                                            # 排除一些明显不是专业的词
+                                            exclude_words = {'时间', '年限', '至今', '奖学金', '证书', '荣誉', '项目'}
+                                            if major_part not in exclude_words:
+                                                education['major'] = major_part
+                                                break
+
+                    # ========== 优先级2: 检查普通"学历"关键词格式（如"学校 专业 学位 时间"）==========
+                    # 只有在括号格式未匹配时才尝试
                     if not education['degree']:
+                        for degree in degree_keywords:
+                            if degree in line:
+                                education['degree'] = degree
+                                # 提取学校（去掉学位后的部分）
+                                school_part = line.replace(degree, '').strip()
+                                # 尝试提取时间（末尾的时间格式）
+                                time_match = re.search(r'(\d{4})\s*[.-年]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)(?:\s*[.-年]\s*\d{1,2})?', school_part)
+                                if time_match:
+                                    education['duration'] = time_match.group(0)
+                                    # 去掉时间后的部分作为学校
+                                    school_part = re.sub(time_match.group(0), '', school_part).strip()
+                                # 尝试从剩余部分提取专业（如"学校 (英文名) 专业"格式）
+                                if ')' in school_part or '）' in school_part:
+                                    # 找到最后一个右括号
+                                    last_paren_pos = max(school_part.rfind(')'), school_part.rfind('）'))
+                                    if last_paren_pos > 0:
+                                        potential_major = school_part[last_paren_pos + 1:].strip()
+                                        # 如果括号后的内容看起来像专业名（2-6个汉字）
+                                        if potential_major and re.match(r'^[\u4e00-\u9fa5]{2,6}$', potential_major):
+                                            education['major'] = potential_major
+                                            # 学校名是括号前的部分
+                                            school_part = school_part[:last_paren_pos + 1].strip()
+                                # 剩余部分作为学校名
+                                education['school'] = school_part
+                                break
+
+                    # ========== 向前查找学历和专业（范围：前3行）- 支持时间->专业->学校格式 ==========
+                    for j in range(max(0, i - 3), i):
+                        prev_line = lines[j].strip()
+                        if not prev_line:
+                            continue
+
+                        # 跳过明显的联系方式行（电话、邮箱等）
+                        if any(kw in prev_line for kw in ['电话', '邮箱', '手机', 'TEL', 'Email', 'mail', '@', 'github.com', 'linkedin.com', ':155', ':186', ':138', ':139', ':137', ':136', ':135', ':188', ':189']):
+                            continue  # 跳过联系方式行
+
+                        # 跳过年龄、性别、CET等非专业信息行
+                        if re.search(r'\d+\s*岁|^\d+\s*\||男|女|cet|CET|四级|六级|托福|雅思|GRE', prev_line):
+                            continue  # 跳过年龄/性别/英语等级行
+
+                        # 跳过明显不是专业的行（用continue继续向前搜索）
+                        skip_prefixes = ['求职意向', '应聘', '意向', '岗位', '职位', '教育背景', '学习经历', '教育经历', '工作经历', '项目经验', '项目经历', '实习经历', '科研经历', '专业背景']
+                        if any(prev_line.startswith(p) for p in skip_prefixes):
+                            continue  # 跳过标题行，继续向前搜索
+                        # 跳过看起来像姓名的短行（2-4个汉字，不包含常见专业关键词）
+                        if re.match(r'^[\u4e00-\u9fa5]{2,4}$', prev_line):
+                            # 常见专业关键词（如果包含这些词，可能是专业名而非姓名）
+                            major_keywords = ['计算机', '软件', '电子', '机械', '会计', '金融', '经济', '管理', '化学', '物理', '数学', '生物', '医学', '文学', '历史', '哲学', '法学', '新闻', '艺术', '建筑', '土木', '电气', '自动化', '通信', '材料', '环境', '交通', '统计', '心理学']
+                            if not any(kw in prev_line for kw in major_keywords):
+                                continue  # 跳过姓名行
+
+                        # 检查是否包含学历关键词
+                        if not education['degree']:
+                            for degree in degree_keywords:
+                                if degree in prev_line:
+                                    # 检查：如果这行只有学历关键词（没有其他内容），跳过
+                                    # 因为这很可能是上一个学校的学历，不是当前学校的
+                                    cleaned_line = prev_line.replace(degree, '').strip()
+                                    if not cleaned_line:
+                                        break  # 纯学历行，跳过
+                                    # 有其他内容，提取学历和专业
+                                    education['degree'] = degree
+                                    # 提取专业（去掉学历后的部分）
+                                    if cleaned_line and cleaned_line != '|' and not any(prev_line.startswith(p) for p in skip_prefixes):
+                                        education['major'] = cleaned_line
+                                    break
+
+                        # 检查 "专业 | 学历" 格式
+                        if not education['degree'] and '|' in prev_line:
+                            parts = prev_line.split('|')
+                            if len(parts) >= 2:
+                                education['major'] = parts[0].strip()
+                                for degree in degree_keywords:
+                                    if degree in parts[1]:
+                                        education['degree'] = degree
+                                        break
+
+                        # 如果还没有major且前一行看起来像专业名（纯中文2-6字）
+                        if not education['major'] and len(prev_line) < 15:
+                            if re.match(r'^[\u4e00-\u9fa5]{2,6}$', prev_line):
+                                exclude_words = {'学校', '大学', '学历', '专业', '教育', '经历', '经验', '背景', '技能', '证书', '课程', '学习', '能力', '方向', '求职意向', '应聘', '项目', '实习', '科研'}
+                                # 添加学历关键词到排除列表（避免"硕士"、"博士"被当作专业）
+                                exclude_words.update(degree_keywords)
+                                # 检查是否包含排除词（部分匹配）
+                                if not any(excluded in prev_line for excluded in exclude_words):
+                                    education['major'] = prev_line
+                                # 如果学校名是之前的整行，更新为正确的学校名
+                                break
+
+                    # 向后查找学历和专业（范围：后20行，扩大搜索范围）
+                    for j in range(i + 1, min(i + 21, len(lines))):
+                        next_line = lines[j].strip()
+
+                        # 空行跳过（继续向后搜索，不停止）
+                        if not next_line:
+                            continue
+
+                        # ========== 优先检查：纯学历关键词行（如"本科"、"硕士"等）==========
+                        # 这种格式常见于缩进的学历行，如："  本科"
+                        if not education['degree'] and next_line in degree_keywords:
+                            education['degree'] = next_line
+                            continue  # 继续向后搜索专业和时间
+
+                        # 检查行是否仅由学历关键词组成（可能前后有空格）
+                        if not education['degree']:
+                            for degree in degree_keywords:
+                                if next_line == degree or next_line.strip() == degree:
+                                    education['degree'] = degree
+                                    break
+
+                        # 跳过明显的非学历信息行
+                        # 联系方式行特征：包含"电话"、"邮箱"、"手机"、"TEL"等关键字
+                        if any(kw in next_line for kw in ['电话', '邮箱', '手机', 'TEL', 'Email', 'mail', '@', 'github.com', 'linkedin.com']):
+                            continue
+                        # 标题行特征：包含"求职意向"、"项目经验"等
+                        if any(next_line.startswith(kw) or next_line == kw for kw in ['求职意向', '应聘', '项目经验', '项目经历', '工作经历', '实习经历', '技能', '荣誉', '奖项', '资格证书']):
+                            break
+                        # 过短的行，但如果包含学历关键词则不跳过（如"硕士"、"博士"）
+                        if len(next_line) < 3:
+                            # 检查是否是纯学历关键词
+                            is_degree_keyword = next_line in degree_keywords
+                            if not is_degree_keyword:
+                                continue
+                        # 遇到新学校停止（但不包括内设学院）
+                        if '大学' in next_line:
+                            break  # 遇到新大学，停止
+                        # 跳过明显的内设学院（不停止搜索）
+                        # 只有独立的学院名（短、不含学科关键词）才停止
+                        if '学院' in next_line and len(next_line) < 15:
+                            # 检查是否是内设学院（包含学科关键词）
+                            internal_keywords = ['管理', '外国语', '人文', '理学', '工学', '法学', '医学',
+                                                  '艺术', '体育', '信息', '软件', '计算机', '电气', '机械',
+                                                  '土木', '化学', '材料', '生命', '环境', '建筑', '交通']
+                            if not any(kw in next_line for kw in internal_keywords):
+                                break  # 可能是独立的学院名
+
+                        # 提取学历（优先查找包含"/"的行，如"会计 / 硕士"）
+                        # 注意：后向搜索的degree应该覆盖前向搜索的degree（因为更近）
                         # 优先检查 "专业 / 学历" 格式
-                        if '/' in next_line:
+                        if not education['degree'] and '/' in next_line:
                             for degree in degree_keywords:
                                 if degree in next_line:
                                     education['degree'] = degree
@@ -733,7 +1237,7 @@ class ResumeParser:
                                         education['major'] = parts[0].strip()
                                     break
                         # 检查括号格式，如 "软件工程(本科)" 或 "计算机科学与技术（硕士）"
-                        else:
+                        if not education['degree']:
                             # 使用正则提取括号中的学历
                             for pattern in degree_patterns:
                                 match = re.search(pattern, next_line)
@@ -741,32 +1245,93 @@ class ResumeParser:
                                     education['degree'] = match.group(1)
                                     # 提取专业（括号前的部分）
                                     major_part = re.sub(r'[()（）].*?', '', next_line).strip()
-                                    education['major'] = major_part
+                                    if major_part:
+                                        education['major'] = major_part
                                     break
 
-                            # 如果没找到括号格式，尝试普通查找
-                            if not education['degree']:
-                                for degree in degree_keywords:
-                                    if degree in next_line:
-                                        education['degree'] = degree
-                                        break
+                        # 检查行是否包含学历关键词（如"本科学历"、"本科在读"等）
+                        if not education['degree']:
+                            for degree in degree_keywords:
+                                if degree in next_line:
+                                    education['degree'] = degree
+                                    break
 
-                    # 提取时间
-                    if not education['duration']:
-                        time_match = re.search(r'(\d{4})\s*[-.年]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', next_line)
-                        if time_match:
-                            education['duration'] = time_match.group(0)
-
-                # 向前查找时间（范围：前2行）
-                if not education['duration']:
-                    for j in range(max(0, i - 2), i):
-                        prev_line = lines[j].strip()
-                        time_match = re.search(r'(\d{4})\s*[-.年]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', prev_line)
-                        if time_match:
-                            education['duration'] = time_match.group(0)
+                        # 如果已找到学历和专业，停止向后搜索
+                        if education['degree'] and education['major']:
                             break
 
-            # ========== 模式2: 同一行包含学校+学历（如"上海大学 本科"）==========
+                        # 如果没有major，尝试从独立的专业名称行提取
+                        if not education['major'] and len(next_line) < 15:
+                            # 跳过包含"学院"的行（那是内设学院，不是专业）
+                            if '学院' not in next_line:
+                                # 检查是否是纯中文专业名称（2-6个汉字，无特殊字符）
+                                if re.match(r'^[\u4e00-\u9fa5]{2,6}$', next_line):
+                                    # 排除一些明显不是专业的词
+                                    exclude_words = {'学校', '大学', '学历', '专业', '教育', '经历', '经验', '背景', '技能', '证书', '课程', '学习', '能力', '方向'}
+                                    # 添加学历关键词到排除列表（避免"硕士"、"博士"被当作专业）
+                                    exclude_words.update(degree_keywords)
+                                    if next_line not in exclude_words:
+                                        education['major'] = next_line
+
+                        # 提取时间
+                        if not education['duration']:
+                            # 标准格式：2019.06-2023.06 或 2019年06月-2023年06月
+                            time_match = re.search(r'(\d{4})\s*[-.年]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', next_line)
+                            if time_match:
+                                education['duration'] = time_match.group(0)
+                                # 如果行中包含时间，尝试提取时间前的专业（如"产业经济学 2023.09-2026.06"）
+                                if not education['major']:
+                                    before_time = next_line[:time_match.start()].strip()
+                                    # 移除常见的分隔符
+                                    before_time = re.sub(r'[\s、，,]+$', '', before_time).strip()
+                                    # 检查是否是有效的专业名（2-15个字符，可能是中文或含括号/斜杠）
+                                    if before_time and 2 <= len(before_time) <= 15 and re.match(r'^[\u4e00-\u9fa5()（）/\-·]+$', before_time):
+                                        # 排除明显不是专业的词
+                                        exclude_words = {'学校', '大学', '学历', '专业', '教育', '经历', '经验', '背景', '技能', '证书', '课程', '学习', '能力', '方向'}
+                                        if not any(excluded in before_time for excluded in exclude_words):
+                                            education['major'] = before_time
+                            # 特殊格式：2019 年 6 月至 2023 年 6 月（带空格和"至"）
+                            elif not education['duration']:
+                                time_match = re.search(r'(\d{4})\s*年\s*\d{1,2}\s*月\s*[-.年—至到]+\s*(\d{4}|\d{1,2}|至今)', next_line)
+                                if time_match:
+                                    education['duration'] = time_match.group(0)
+
+                    # 向前查找时间（范围：前2行）
+                    if not education['duration']:
+                        for j in range(max(0, i - 2), i):
+                            prev_line = lines[j].strip()
+                            time_match = re.search(r'(\d{4})\s*[-.年]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', prev_line)
+                            if time_match:
+                                education['duration'] = time_match.group(0)
+                                break
+
+            # ========== 模式2: 同一行包��"学校 / 学历"格式 ==========
+            # 例如："学历 :东北农业大学(211) / 本科" 或 "东北农业大学 / 本科"
+            elif '/' in line and ('大学' in line or '学院' in line):
+                # 检查是否有学历关键词
+                if any(deu in line for deu in degree_keywords):
+                    parts = line.split('/')
+                    if len(parts) >= 2:
+                        # 第一部分是学校（可能包含"学历:"前缀）
+                        school_part = parts[0].strip()
+                        # 去掉"学历:"前缀
+                        school_part = re.sub(r'^学历\s*[:：]\s*', '', school_part)
+                        school_part = re.sub(r'^学校\s*[:：]\s*', '', school_part)
+
+                        education = {
+                            'school': school_part,
+                            'degree': '',
+                            'major': '',
+                            'duration': ''
+                        }
+
+                        # 从第二部分提取学历
+                        for degree in degree_keywords:
+                            if degree in parts[1]:
+                                education['degree'] = degree
+                                break
+
+            # ========== 模式3: 同一行包含学校+学历（空格分隔，如"上海大学 本科"）==========
             elif any(edu in line for edu in degree_keywords) and ('大学' in line or '学院' in line):
                 education = {
                     'school': '',
@@ -784,8 +1349,34 @@ class ResumeParser:
                         education['school'] = school_part
                         break
 
-            # 添加到列表
-            if education and education['school']:
+            # 如果找到学校但没有学历，尝试推断
+            if education and education['school'] and not education['degree']:
+                # 检查时间范围推断学历
+                if education['duration']:
+                    year_match = re.findall(r'(\d{4})', education['duration'])
+                    if len(year_match) == 2:
+                        start_year, end_year = int(year_match[0]), int(year_match[1])
+                        duration_years = end_year - start_year
+                        if duration_years >= 3 and duration_years <= 5:
+                            education['degree'] = '本科'
+                        elif duration_years >= 1 and duration_years <= 3:
+                            education['degree'] = '硕士'
+
+            # 添加到列表（只要有学校，或有专业+学历即可）
+            if education and (education['school'] or (education['degree'] and education['major'])):
+                # 检查是否已存在相同school的记录，避免重复
+                is_duplicate = False
+                if education['school']:
+                    for existing in education_list:
+                        if existing.get('school') == education['school']:
+                            is_duplicate = True
+                            break
+                if is_duplicate:
+                    i += 1
+                    continue
+                # 如果学校名为空但有degree和major，标记school为未知
+                if not education['school'] and education['degree'] and education['major']:
+                    education['school'] = '未知'
                 education_list.append(education)
 
                 # 最多取5条
@@ -845,9 +1436,15 @@ class ResumeParser:
 
                         # 提取时间
                         if not education['duration']:
+                            # 标准格式：2019.06-2023.06 或 2019年06月-2023年06月
                             time_match = re.search(r'(\d{4})\s*[-.年]\s*\d{1,2}\s*[-.年—至到]\s*(\d{4}|\d{1,2}|至今)', next_line)
                             if time_match:
                                 education['duration'] = time_match.group(0)
+                            # 特殊格式：2019 年 6 月至 2023 年 6 月（带空格和"至"）
+                            elif not education['duration']:
+                                time_match = re.search(r'(\d{4})\s*年\s*\d{1,2}\s*月\s*[-.年—至到]+\s*(\d{4}|\d{1,2}|至今)', next_line)
+                                if time_match:
+                                    education['duration'] = time_match.group(0)
 
                     # 如果找到了学校但没有学历，尝试推断
                     if education['school'] and not education['degree']:
@@ -869,6 +1466,57 @@ class ResumeParser:
                         # 最多取3条
                         if len(education_list) >= 3:
                             break
+
+        # 后处理：从school��段中提取degree并清理school名称
+        education_list = self._post_process_education(education_list)
+        return education_list
+
+    def _post_process_education(self, education_list: List[Dict]) -> List[Dict]:
+        """后处理教育经历列表，从school字段中提取degree并清理school名称"""
+        degree_keywords = ['博士', '硕士', '本科', '大专', '高中', '专升本', '中专', 'MBA', 'EMBA']
+
+        for education in education_list:
+            # 如果degree为空但school不为空，尝试从school中提取degree
+            if not education.get('degree') and education.get('school'):
+                school = education['school']
+
+                # 检查school中是否包含degree关键词
+                for degree in degree_keywords:
+                    if degree in school:
+                        education['degree'] = degree
+                        # 清理school名称：移除degree关键词
+                        # 处理各种格式：
+                        # - "中北大学本科财务管理" -> "中北大学财务管理"
+                        # - "复旦大学硕士工商管理" -> "复旦大学工商管理"
+                        # - "本科学历 湖州师范学院" -> "湖州师范学院"
+
+                        # 先尝试找到degree的位置
+                        idx = school.find(degree)
+                        if idx >= 0:
+                            # 移除degree关键词
+                            cleaned_school = school[:idx] + school[idx + len(degree):]
+                            # 清理可能的分隔符和多余空格
+                            cleaned_school = cleaned_school.strip(' ·•-—–\t ')
+                            # 清理"学历"前缀（如"学历 湖州师范学院" -> "湖州师范学院"）
+                            cleaned_school = re.sub(r'^学历\s*[:：]?\s*', '', cleaned_school)
+                            cleaned_school = cleaned_school.strip()
+                            education['school'] = cleaned_school if cleaned_school else school[:idx]
+                        break
+
+            # 清理school字段中明显的错误识别
+            # 例如："奖项荣誉"被识别为学校
+            if education.get('school'):
+                school = education['school']
+                # 过滤明显的非学校名称
+                non_school_keywords = ['奖项荣誉', '荣誉奖项', '获奖情况', '奖励', '证书',
+                                      '奖学金', '通过', '获得', '等级', '考试', '成绩',
+                                      '英语等级', 'CET', '雅思', '托福', 'GRE', '学历 ']
+                if any(kw in school for kw in non_school_keywords):
+                    # 如果包含这些关键词，清空school（这不是有效的学校信息）
+                    education['school'] = ''
+                # 检查school是否以"学历"开头（无效）
+                if school.startswith('学历') or school.startswith('学历:'):
+                    education['school'] = ''
 
         return education_list
 
@@ -896,6 +1544,7 @@ class ResumeParser:
             r'(\d{4})\s*[-.—至到]\s*(\d{4})',  # 2020-2024
             r'(\d{4})\.(\d{1,2})\s*[-.—至到]\s*至今',  # 2020.09-至今
             r'(\d{4})年\s*[-.—至到]\s*至今',  # 2020年-至今
+            r'(\d{4})年(\d{1,2})月\s*[-.—至到]\s*至今',  # 2023年7月-至今
         ]
 
         # 公司名识别模式
@@ -906,10 +1555,9 @@ class ResumeParser:
             r'.*集团.*',  # 包含"集团"
             r'.*银行.*',  # 包含"银行"
             r'.*医院.*',  # 包含"医院"
-            # 🔴 移除".*学校.*"，避免把学校误识别为公司
+            #".*学校.*"，避免把学校误识别为公司
         ]
 
-        # 🔴 新增：明显不是工作经历的关键词（专业、课程、学院等）
         non_work_patterns = [
             r'.*学院.*',  # 包含"学院"
             r'.*大学.*',  # 包含"大学"
@@ -919,20 +1567,8 @@ class ResumeParser:
             r'.*教学.*',  # 包含"教学"
             r'.*教育.*',  # 包含"教育"
             r'.*培训.*',  # 包含"培训"
-            r'.*管理.*',  # 🔴 新增：包含"管理"（如"供应链管理"、"工商管理等"）
-            r'.*工程.*',  # 🔴 新增：包含"工程"（如"应用工程"、"化学工程"等）
-            r'.*科学.*',  # 🔴 新增：包含"科学"（如"计算机科学"等）
-            r'.*技术.*',  # 🔴 新增：包含"技术"（如"应用技术"等）
-            r'.*化学.*',  # 🔴 新增：包含"化学"
-            r'.*数学.*',  # 🔴 新增：包含"数学"
-            r'.*物理.*',  # 🔴 新增：包含"物理"
-            r'.*文学.*',  # 🔴 新增：包含"文学"
-            r'.*会计.*',  # 🔴 新增：包含"会计"（可能是专业）
-            r'.*金融.*',  # 🔴 新增：包含"金融"（可能是专业）
-            r'.*经济.*',  # 🔴 新增：包含"经济"（可能是专业）
         ]
 
-        # 🔴 新增：常见的专业名称列表（这些明显不是公司名）
         non_work_majors = [
             '应用化学', '供应链管理', '工商管理', '计算机科学', '软件工程',
             '电子信息', '机械工程', '土木工程', '材料科学', '生物工程',
@@ -947,19 +1583,35 @@ class ResumeParser:
                            '开发', '设计', '测试', '运营', '销售', '财务', '人事', '行政',
                            '分析师', '架构师', '产品经理', '执行', 'PM']
 
-        # 🔴 新增：实习相关关键词（这些经历通常不计入工作经验）
         internship_keywords = ['实习', '兼职', '见习', '实训', '校园']
 
         # 查找工作经历段落（用于确定搜索范围）
         keywords = ['工作经历', '工作经验', '职业经历', '工作']
+        internship_section_keywords = ['实习经历', '实习工作', '实习经验', '见习经历']
         lines = text.split('\n')
         start_idx = None
         end_idx = len(lines)
 
+        def is_section_header(line_text, keyword):
+            """检查是否为section标题（独立成行，或只跟冒号）"""
+            if line_text == keyword:
+                return True
+            for colon in ['：', ':']:
+                if line_text.startswith(keyword + colon):
+                    after_colon = line_text[len(keyword) + len(colon):].strip()
+                    if not after_colon:
+                        return True
+            return False
+
+        # 优先检查是否是实习section，如果是则直接返回空列表
         for i, line in enumerate(lines):
-            if any(keyword in line for keyword in keywords):
+            line_stripped = line.strip()
+            if any(is_section_header(line_stripped, kw) for kw in internship_section_keywords):
+                return []  # 实习section不提取工作经历
+            if any(is_section_header(line_stripped, kw) for kw in keywords):
                 start_idx = i
                 break
+
 
         # 定义搜索范围：如果有"工作经历"标题，从标题前搜索到标题后
         # 如果没有标题，全文档搜索
@@ -999,6 +1651,7 @@ class ResumeParser:
 
             duration = time_lines[time_idx]
 
+
             # 向前查找公司名和职位（范围：前5行）
             company = ''
             position = ''
@@ -1012,6 +1665,11 @@ class ResumeParser:
                 if not line:
                     continue
 
+                work_desc_prefixes = ['负责', '协助', '主导', '参与', '完成', '执行',
+                                     '开展', '跟进', '管理', '策划', '设计', '开发']
+                if any(line.startswith(prefix) for prefix in work_desc_prefixes):
+                    continue
+
                 # 跳过明显不是公司名的行
                 skip_patterns = ['项目职责', '项目业绩', '主要职责', '工作内容', '业绩',
                                '求职意向', '期望薪资', '期望城市']
@@ -1022,6 +1680,10 @@ class ResumeParser:
                 if not company:
                     # 优先匹配包含明确公司关键词的
                     if any(re.search(p, line) for p in company_patterns):
+                        company = line
+                        continue
+                    # 优先级2：包含"|"的行通常是"职位 | 公司"格式
+                    if '|' in line and 3 < len(line) < 100:
                         company = line
                         continue
                     # 次优：排除纯职位行，其他适中长度的行都可能是公司名
@@ -1049,16 +1711,15 @@ class ResumeParser:
                 if company_part and any(re.search(p, company_part) for p in company_patterns):
                     company = company_part
 
-            # 🔴 新增：检查是否是非工作经历（教育/课程/专业等）
             is_education_related = False
             if company:
                 # 检查是否匹配非工作模式
-                if any(re.search(p, company) for p in non_work_patterns):
-                    is_education_related = True
-                # 🔴 新增：检查是否是专业名称
+                for p in non_work_patterns:
+                    if re.search(p, company):
+                        is_education_related = True
+                        break
                 if company in non_work_majors:
                     is_education_related = True
-                # 🔴 新增：检查时间行是否包含教育相关关键词
                 if any(kw in time_line for kw in ['本科', '硕士', '博士', '研究生', '学位']):
                     is_education_related = True
 
@@ -1066,9 +1727,9 @@ class ResumeParser:
                 if any(kw in position for kw in internship_keywords):
                     is_education_related = True
 
-            # 🔴 新增：如果时间行本身包含实习/教育关键词，也跳过
             if any(kw in time_line for kw in internship_keywords + ['教育', '学习', '课程']):
                 is_education_related = True
+
 
             # 创建工作记录（过滤掉教育相关和实习经历）
             if not is_education_related and (company or position):
