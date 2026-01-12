@@ -1,11 +1,13 @@
 """简历API路由"""
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from sqlalchemy import func as db_func, or_
+from typing import List, Optional, Dict, Any
 from uuid import UUID
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 
 from app.core.database import get_db
 from app.models.resume import Resume
@@ -30,9 +32,11 @@ def list_resumes(
     limit: int = Query(10, ge=1, le=500, description="返回记录数"),
     status: Optional[str] = Query(None, description="筛选状态"),
     file_type: Optional[str] = Query(None, description="筛选文件类型"),
-    has_pdf_and_content: bool = Query(False, description="只返回既有PDF文件又有正文的��历"),
+    has_pdf_and_content: bool = Query(False, description="只返回既有PDF文件又有正文的简历"),
     agent_evaluated: Optional[bool] = Query(None, description="只返回已通过Agent评估的简历"),
     min_score: Optional[int] = Query(None, description="最低Agent评分"),
+    exclude_needs_review: bool = Query(True, description="排除需要人工审核的简历(raw_text少于100字符)"),
+    needs_review_only: bool = Query(False, description="只返回需要人工审核的简历"),
     db: Session = Depends(get_db)
 ):
     """获取简历列表"""
@@ -63,6 +67,23 @@ def list_resumes(
     if min_score is not None:
         query = query.filter(Resume.agent_score >= min_score)
 
+    # 只返回需要人工审核的简历（优先级高于exclude_needs_review）
+    if needs_review_only:
+        query = query.filter(
+            or_(
+                Resume.raw_text.is_(None),
+                Resume.raw_text == '',
+                db_func.length(Resume.raw_text) <= 100
+            )
+        )
+    # 排除需要人工审核的简历（文本太少）- 当needs_review_only为false时生效
+    elif exclude_needs_review:
+        query = query.filter(
+            Resume.raw_text.isnot(None),
+            Resume.raw_text != '',
+            db_func.length(Resume.raw_text) > 100
+        )
+
     total = query.count()
 
     # 根据是否Agent评估决定排序方式
@@ -86,6 +107,7 @@ def list_resumes(
             "skills_by_level": resume.skills_by_level,
             "status": resume.status,
             "file_type": resume.file_type,
+            "raw_text_length": len(resume.raw_text) if resume.raw_text else 0,
             "created_at": resume.created_at.isoformat() if resume.created_at else None,
             "updated_at": resume.updated_at.isoformat() if resume.updated_at else None,
             # Agent相关字段
@@ -95,7 +117,7 @@ def list_resumes(
             "agent_evaluation_id": resume.agent_evaluation_id,
             "screening_status": resume.screening_status,
             "agent_evaluated_at": resume.agent_evaluated_at.isoformat() if resume.agent_evaluated_at else None,
-            "work_experience": resume.work_experience  # 🔴 新增：工作经历
+            "work_experience": resume.work_experience
         }
         resume_list.append(resume_dict)
 
@@ -124,7 +146,7 @@ def get_resume(resume_id: UUID, db: Session = Depends(get_db)):
         "education_level": resume.education_level,
         "work_years": resume.work_years,
         "skills": resume.skills or [],
-        "skills_by_level": resume.skills_by_level,  # 新增
+        "skills_by_level": resume.skills_by_level,
         "work_experience": resume.work_experience or [],
         "project_experience": resume.project_experience or [],
         "education_history": resume.education_history or [],
@@ -137,6 +159,52 @@ def get_resume(resume_id: UUID, db: Session = Depends(get_db)):
         "status": resume.status,
         "created_at": resume.created_at.isoformat() if resume.created_at else None,
         "updated_at": resume.updated_at.isoformat() if resume.updated_at else None
+    }
+
+
+@router.put("/{resume_id}", response_model=dict)
+def update_resume(
+    resume_id: UUID,
+    update_data: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db)
+):
+    """更新简历信息（人工审核时手动补充）
+
+    支持更新的字段：
+    - candidate_name: 姓名
+    - phone: 电话
+    - email: 邮箱
+    - education: 学历
+    - work_years: 工作年限
+    - skills: 技能标签
+    - work_experience: 工作经历
+    - project_experience: 项目经历
+    - education_history: 教育背景
+    """
+    resume = db.query(Resume).filter(Resume.id == resume_id).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="简历不存在")
+
+    # 更新允许的字段
+    allowed_fields = {
+        'candidate_name', 'phone', 'email', 'education', 'work_years',
+        'skills', 'work_experience', 'project_experience', 'education_history'
+    }
+
+    for field, value in update_data.items():
+        if field in allowed_fields and value is not None:
+            setattr(resume, field, value)
+
+    resume.updated_at = datetime.now()
+    db.commit()
+    db.refresh(resume)
+
+    logger.info(f"简历已更新: {resume.id}, 候选人: {resume.candidate_name}")
+
+    return {
+        "resume_id": str(resume.id),
+        "message": "简历更新成功"
     }
 
 
@@ -199,10 +267,6 @@ async def upload_resume(
         db.refresh(resume)
 
         logger.info(f"简历已保存: {resume.id}, 候选人: {resume.candidate_name}")
-
-        # 4. ❌ 已删除本地自动匹配功能（违反CLAUDE.md核心原则）
-        # 根据核心原则：所有评分必须通过外部Agent完成
-        # 如果需要自动评估，应该调用外部Agent服务
 
         return {
             "resume_id": str(resume.id),
@@ -270,7 +334,7 @@ def reparse_resume(
         resume.work_experience = parsed_data.get('work_experience', [])
         resume.project_experience = parsed_data.get('project_experience', [])
         resume.education_history = parsed_data.get('education_history', [])
-        # 🔴 修复：确保work_years不为None，设为0
+        # 确保work_years不为None，设为0
         work_years = parsed_data.get('work_years', 0)
         resume.work_years = work_years if work_years is not None else 0
         resume.skills = parsed_data.get('skills', [])
@@ -280,7 +344,7 @@ def reparse_resume(
         db.commit()
         db.refresh(resume)
 
-        logger.info(f"简历重新解析成功: {resume.id}, 候选人: {resume.candidate_name}, 工作年限: {resume.work_years}")
+        logger.info(f"简历重新解析成功: {resume.id}, ���选人: {resume.candidate_name}, 工作年限: {resume.work_years}")
 
         return {
             "resume_id": str(resume.id),

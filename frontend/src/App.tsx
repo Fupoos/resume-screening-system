@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import Jobs from './pages/Jobs';
 import Resumes from './pages/Resumes';
 import Screening from './pages/Screening';
+import ManualReview from './pages/ManualReview';
 import './App.css';
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="resumes" element={<Resumes />} />
+          <Route path="manual-review" element={<ManualReview />} />
           <Route path="screening" element={<Screening />} />
         </Route>
       </Routes>

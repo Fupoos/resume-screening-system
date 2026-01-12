@@ -6,6 +6,7 @@ import {
   TeamOutlined,
   InboxOutlined,
   FileTextOutlined,
+  CheckCircleOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import './MainLayout.css';
@@ -34,6 +35,12 @@ const MainLayout = () => {
       icon: <InboxOutlined />,
       label: '简历列表',
       onClick: () => navigate('/resumes'),
+    },
+    {
+      key: '/manual-review',
+      icon: <CheckCircleOutlined />,
+      label: '人工审核',
+      onClick: () => navigate('/manual-review'),
     },
     {
       key: '/screening',

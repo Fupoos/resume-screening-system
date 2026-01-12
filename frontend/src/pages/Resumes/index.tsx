@@ -63,8 +63,8 @@ const ResumesPage = () => {
     try {
       // 计算跳过数量
       const skip = (page - 1) * pageSize;
-      // 只获取PDF类型的简历
-      const data = await getResumes({ limit: pageSize, skip: skip, file_type: 'pdf' });
+      // 获取可解析的简历（排除需要人工审核的，即文本少于100字符的）
+      const data = await getResumes({ limit: pageSize, skip: skip, exclude_needs_review: true });
       setResumes(data.items || []);
       setTotal(data.total || 0);
     } catch (error) {

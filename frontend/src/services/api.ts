@@ -100,6 +100,8 @@ export const getResumes = async (params?: {
   has_pdf_and_content?: boolean;  // 只返回既有PDF又有正文的简历
   agent_evaluated?: boolean;  // 只返回已通过Agent评估的简历
   min_score?: number;  // 最低Agent评分
+  exclude_needs_review?: boolean;  // 排除需要人工审核的简历(raw_text少于100字符)
+  needs_review_only?: boolean;  // 只返回需要人工审核的简历
 }): Promise<{ total: number; items: any[]; page?: number; page_size?: number }> => {
   return api.get('/resumes/', { params });
 };
@@ -107,6 +109,21 @@ export const getResumes = async (params?: {
 /** 获取简历详情 */
 export const getResume = async (id: string): Promise<any> => {
   return api.get(`/resumes/${id}`);
+};
+
+/** 更新简历信息（人工审核时手动补充） */
+export const updateResume = async (id: string, data: {
+  candidate_name?: string;
+  phone?: string;
+  email?: string;
+  education?: string;
+  work_years?: number;
+  skills?: string[];
+  work_experience?: any[];
+  project_experience?: any[];
+  education_history?: any[];
+}): Promise<{ resume_id: string; message: string }> => {
+  return api.put(`/resumes/${id}`, data);
 };
 
 /** 上传简历 */
