@@ -211,10 +211,21 @@ const ManualReviewPage = () => {
     {
       title: '操作',
       key: 'action',
-      width: 180,
+      width: 240,
       fixed: 'right' as const,
       render: (_: any, record: Resume) => (
         <Space size="small">
+          {(record as any).file_type === 'pdf' && (
+            <Tooltip title="查看PDF">
+              <Button
+                type="link"
+                size="small"
+                onClick={() => window.open(`http://localhost:8000/api/v1/pdfs/${record.id}`, '_blank')}
+              >
+                查看PDF
+              </Button>
+            </Tooltip>
+          )}
           <Tooltip title="查看详情">
             <Button
               type="link"
@@ -289,7 +300,7 @@ const ManualReviewPage = () => {
             showTotal: (total) => `共 ${total} 份简历`,
             onChange: handleTableChange,
           }}
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1100 }}
         />
       </Card>
 
@@ -374,7 +385,8 @@ const ManualReviewPage = () => {
             编辑信息
           </Button>,
         ]}
-        width={700}
+        width={1000}
+        style={{ top: 20 }}
       >
         {currentResume && (
           <div>
@@ -389,12 +401,55 @@ const ManualReviewPage = () => {
               <Descriptions.Item label="工作年限">{currentResume.work_years || 0}年</Descriptions.Item>
             </Descriptions>
 
+            {/* PDF/DOCX 预览区域 */}
+            {(currentResume as any).file_type === 'pdf' && (
+              <div style={{ marginTop: 16 }}>
+                <h4>原始文件预览</h4>
+                <div
+                  style={{
+                    height: '500px',
+                    border: '1px solid #e8e8e8',
+                    borderRadius: 8,
+                    overflow: 'hidden',
+                    backgroundColor: '#f5f5f5'
+                  }}
+                >
+                  <iframe
+                    src={`http://localhost:8000/api/v1/pdfs/${currentResume.id}#view=FitH`}
+                    style={{ width: '100%', height: '100%', border: 'none' }}
+                    title="简历PDF预览"
+                  />
+                </div>
+              </div>
+            )}
+
+            {(currentResume as any).file_type === 'docx' && (
+              <div style={{ marginTop: 16 }}>
+                <h4>原始文件预览</h4>
+                <div
+                  style={{
+                    height: '500px',
+                    border: '1px solid #e8e8e8',
+                    borderRadius: 8,
+                    overflow: 'hidden',
+                    backgroundColor: '#f5f5f5'
+                  }}
+                >
+                  <iframe
+                    src={`http://localhost:8000/api/v1/pdfs/${currentResume.id}/preview`}
+                    style={{ width: '100%', height: '100%', border: 'none' }}
+                    title="简历DOCX预览"
+                  />
+                </div>
+              </div>
+            )}
+
             <div style={{ marginTop: 16 }}>
               <h4>技能标签</h4>
               <SkillsDisplay skills={currentResume.skills || []} maxDisplay={50} />
             </div>
 
-            {(currentResume as any).raw_text && (
+            {(currentResume as any).raw_text && (currentResume as any).raw_text.length > 0 && (
               <div style={{ marginTop: 16 }}>
                 <h4>原始文本 ({(currentResume as any).raw_text?.length || 0} 字符)</h4>
                 <div

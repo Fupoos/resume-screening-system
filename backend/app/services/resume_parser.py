@@ -160,17 +160,38 @@ class ResumeParser:
         # 提取教育背景
         result['education_history'] = self._extract_education(text)
         if result['education_history']:
+            # 标准化学历映射（学士→本科等）
+            degree_mapping = {
+                '博士研究生': '博士', '博士': '博士',
+                '硕士研究生': '硕士', '硕士': '硕士',
+                '学士': '本科', '本科': '本科',
+                '大专': '大专', '专科': '大专',
+                '高中': '高中', '中专': '高中'
+            }
+
             # 取最高学历
             education_order = ['博士', '硕士', '本科', '大专', '高中']
             highest_edu_record = None
             for edu in education_order:
                 for edu_history in result['education_history']:
-                    if edu in edu_history.get('degree', ''):
+                    degree = edu_history.get('degree', '')
+                    # 标准化学历名称
+                    normalized_degree = degree_mapping.get(degree, degree)
+                    if normalized_degree == edu:
                         result['education'] = edu
                         highest_edu_record = edu_history
                         break
                 if result['education']:
                     break
+
+            # 如果还没找到，直接检查原始学历
+            if not result['education']:
+                for edu_history in result['education_history']:
+                    degree = edu_history.get('degree', '')
+                    if degree:
+                        result['education'] = degree_mapping.get(degree, degree)
+                        highest_edu_record = edu_history
+                        break
 
             # 使用本地学校分类
             if highest_edu_record and highest_edu_record.get('school'):
@@ -178,6 +199,36 @@ class ResumeParser:
                 school_name = highest_edu_record.get('school', '')
                 result['education_level'] = classify_university(school_name)
                 logger.info(f"学历：{result['education']}，学校：{school_name}，等级：{result['education_level']}")
+
+        # 备用方案：从基本信息部分提取学历（处理"学 历:本科(211)"格式）
+        if not result['education'] or not result['education_level']:
+            lines = text.split('\n')
+            basic_info_section = False
+            for i, line in enumerate(lines):
+                line_stripped = line.strip()
+                # 检测基本信息段落
+                if '基本信息' in line_stripped:
+                    basic_info_section = True
+                    continue
+                # 如果离开基本信息段落，停止
+                if basic_info_section and any(kw in line_stripped for kw in ['工作经历', '项目经验', '教育经历', '技能']):
+                    break
+                # 在基本信息段落内查找学历
+                if basic_info_section and ('学 历:' in line_stripped or '学历:' in line_stripped):
+                    # 提取学历（支持"本科(211)"格式）
+                    degree_match = re.search(r'[:：]\s*([本科大专高中中专博士硕士学士]+)(?:\(([211985双非QS前\d]+)\))?', line_stripped)
+                    if degree_match:
+                        degree = degree_match.group(1)
+                        # 标准化学历名称
+                        degree_mapping = {'学士': '本科', '硕士研究生': '硕士', '博士研究生': '博士'}
+                        degree = degree_mapping.get(degree, degree)
+                        result['education'] = degree
+                        # 如果有等级标签（如211），提取它
+                        if degree_match.group(2):
+                            level_tag = degree_match.group(2)
+                            result['education_level'] = level_tag
+                        logger.info(f"从基本信息提取学历：{result['education']}")
+                    break
 
         # 提取工作经历
         result['work_experience'] = self._extract_work_experience(text)
@@ -312,6 +363,12 @@ class ResumeParser:
             # 其他常见非姓名词汇
             '个人介绍', '基本信息', '专业技能', '主修课程', '获奖情况',
             '证书情况', '语言能力', '计算机能力', '工作内容',
+            # 技术术语（防止误识别为姓名）
+            '软考', '编程语言', '编程', '数据库', '算法', '前端', '后端',
+            '全栈', '运维', '架构', '开发', '设计', '分析', '数据结构',
+            '计算机网络', '操作系统', '计算机科学', '软件工程', '人工智能',
+            '机器学习', '深度学习', '大数据', '云计算', '区块链',
+            '移动开发', 'Web开发', '嵌入式', '网络安全', '游戏开发',
         }
 
         #模式：支持带空格的姓名（如"李 晓 斌"）
@@ -436,6 +493,11 @@ class ResumeParser:
 
         # 检查长度（姓名通常是2-4个字）
         if len(name) < 2 or len(name) > 4:
+            return False
+
+        # 检查首字是否为常见姓氏（百家姓 + 常见复姓）
+        common_surnames = set('赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董粱杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍万柯卢莫房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉钮程')
+        if name[0] not in common_surnames:
             return False
 
         # 检查是否包含明显的非姓名词汇（这些词通常不会单独出现作为姓名）
@@ -930,6 +992,37 @@ class ResumeParser:
                         for degree in degree_keywords:
                             if degree in parts[1]:
                                 education['degree'] = degree
+                                break
+
+            # ========== 新增模式: 处理"学校:xxx"格式（如乔亭志简历） ==========
+            if '学校:' in line or 'school:' in line.lower():
+                # 提取学校名
+                school_match = re.search(r'学校[:：]\s*([^\s]+(?:[\u4e00-\u9fa5a-zA-Z\s]*大学|学院)?[\u4e00-\u9fa5a-zA-Z]*)', line)
+                if school_match:
+                    school_name = school_match.group(1).strip()
+                    # 检查学校名是否有效（包含"大学"或"学院"）
+                    if '大学' in school_name or '学院' in school_name:
+                        education = {
+                            'school': school_name,
+                            'degree': '',
+                            'major': '',
+                            'duration': ''
+                        }
+                        # 向后搜索专业（通常在下一行或几行内）
+                        for j in range(i + 1, min(i + 10, len(lines))):
+                            next_line = lines[j].strip()
+                            if not next_line:
+                                continue
+                            # 检查是否是专业行
+                            if '专业:' in next_line or 'major:' in next_line.lower():
+                                major_match = re.search(r'专业[:：]\s*([^\s]+.*)', next_line)
+                                if major_match:
+                                    education['major'] = major_match.group(1).strip()
+                            # 如果遇到新的section，停止
+                            if any(kw in next_line for kw in ['工作经历', '项目经验', '联系方式', '技能']):
+                                break
+                            # 如果找到专业了，停止搜索
+                            if education['major']:
                                 break
 
             # ========== 模式1: 学校名独立成行（包含"大学"或"学院"）==========

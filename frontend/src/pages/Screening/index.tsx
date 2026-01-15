@@ -1,6 +1,6 @@
 /** 筛选结果页面 - 只显示已配置FastGPT Agent的岗位类别（目前只有实施顾问） */
-import { useState, useEffect } from 'react';
-import { Card, Table, Tag, Button, message, Tooltip } from 'antd';
+import { useState, useEffect, useMemo } from 'react';
+import { Card, Table, Tag, Button, message, Tooltip, Radio, Space } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { JOB_CATEGORY_COLORS } from '../../types';
@@ -42,6 +42,10 @@ const ScreeningPage = () => {
     pageSize: 50,
     total: 0,
   });
+  const [timeRange, setTimeRange] = useState<string>('all'); // 'all' | 'today' | 'this_week' | 'this_month'
+  const [timeStats, setTimeStats] = useState({ today: 0, thisWeek: 0, thisMonth: 0, all: 0 });
+  const [sortField, setSortField] = useState<string>('agent_evaluated_at');
+  const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | null>('descend');
 
   // 加载通过Agent评估的简历
   useEffect(() => {
@@ -55,18 +59,28 @@ const ScreeningPage = () => {
     return () => clearInterval(interval); // 清理定时器
   }, []);
 
+  // 监听时间范围变化
+  useEffect(() => {
+    loadResumes(1, pagination.pageSize);
+  }, [timeRange]);
+
   const loadResumes = async (page: number = 1, pageSize: number = 50) => {
     setLoading(true);
     try {
       const skip = (page - 1) * pageSize;
       // 🔴 修改：调用筛选结果API，只显示已配置FastGPT Agent的岗位类别（目前只有实施顾问）
-      const data = await getScreeningResults({
-        skip,
-        limit: pageSize,
-      });
+      const params: any = { skip, limit: pageSize };
+      // 添加时间范围筛选
+      if (timeRange !== 'all') {
+        params.time_range = timeRange;
+      }
+      const data = await getScreeningResults(params);
 
       // 适配数据格式：results -> items
       const results = data.results || [];
+
+      // 同时更新统计数据
+      fetchTimeStats();
 
       // 为了兼容旧代码，添加字段映射
       const adaptedResults = results.map((item: any) => ({
@@ -90,8 +104,88 @@ const ScreeningPage = () => {
     }
   };
 
-  const handleTableChange = (pagination: any) => {
-    loadResumes(pagination.current, pagination.pageSize);
+  const handleTableChange = (newPagination: any, _filters: any, sorter: any) => {
+    // 处理排序（前端排序）
+    if (sorter && !Array.isArray(sorter)) {
+      setSortField(sorter.field);
+      setSortOrder(sorter.order as 'ascend' | 'descend' | null);
+    }
+
+    // 只在分页变化时重新加载数据
+    const pageChanged = newPagination.current !== pagination.current;
+    const pageSizeChanged = newPagination.pageSize !== pagination.pageSize;
+
+    if (pageChanged || pageSizeChanged) {
+      loadResumes(newPagination.current, newPagination.pageSize);
+    }
+  };
+
+  // 时间范围变化处理
+  const handleTimeRangeChange = (e: any) => {
+    setTimeRange(e.target.value);
+  };
+
+  // 时间标签函数
+  const getTimeLabel = (createdAt: string | null | undefined) => {
+    if (!createdAt) return { text: '-', color: 'default' };
+
+    const date = new Date(createdAt);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const thisWeekStart = new Date(today);
+    thisWeekStart.setDate(today.getDate() - today.getDay()); // 周日作为本周开始
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    if (date >= today) {
+      return { text: '今天', color: 'red' };
+    } else if (date >= thisWeekStart) {
+      return { text: '本周', color: 'gold' };
+    } else if (date >= thisMonthStart) {
+      return { text: '本月', color: 'blue' };
+    } else {
+      // 显示具体日期
+      return {
+        text: `${date.getMonth() + 1}-${date.getDate()}`,
+        color: 'default'
+      };
+    }
+  };
+
+  // 格式化完整时间
+  const formatDateTime = (dateStr: string | null | undefined) => {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    return `${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+  };
+
+  // 获取各时间范围的统计数据
+  const fetchTimeStats = async () => {
+    try {
+      // 获取全部数量
+      const allData = await getScreeningResults({ limit: 1 });
+      const allTotal = allData.total || 0;
+
+      // 获取今天的数量
+      const todayData = await getScreeningResults({ limit: 1, time_range: 'today' });
+      const todayTotal = todayData.total || 0;
+
+      // 获取本周的数量
+      const weekData = await getScreeningResults({ limit: 1, time_range: 'this_week' });
+      const weekTotal = weekData.total || 0;
+
+      // 获取本月的数量
+      const monthData = await getScreeningResults({ limit: 1, time_range: 'this_month' });
+      const monthTotal = monthData.total || 0;
+
+      setTimeStats({
+        all: allTotal,
+        today: todayTotal,
+        thisWeek: weekTotal,
+        thisMonth: monthTotal
+      });
+    } catch (error) {
+      console.error('获取统计数据失败:', error);
+    }
   };
 
   // 获取筛选状态标签颜色
@@ -118,6 +212,37 @@ const ScreeningPage = () => {
     return '#f5222d';  // 红色
   };
 
+  // 对数据进行排序
+  const sortedResumes = useMemo(() => {
+    const sorted = [...resumes];
+    if (sortField && sortOrder) {
+      sorted.sort((a, b) => {
+        let compareResult = 0;
+        switch (sortField) {
+          case 'candidate_name':
+            const nameA = a.candidate_name || '';
+            const nameB = b.candidate_name || '';
+            compareResult = nameA.localeCompare(nameB, 'zh-CN');
+            break;
+          case 'agent_score':
+            const scoreA = a.agent_score ?? -1;
+            const scoreB = b.agent_score ?? -1;
+            compareResult = scoreA - scoreB;
+            break;
+          case 'agent_evaluated_at':
+            const timeA = a.agent_evaluated_at ? new Date(a.agent_evaluated_at).getTime() : 0;
+            const timeB = b.agent_evaluated_at ? new Date(b.agent_evaluated_at).getTime() : 0;
+            compareResult = timeA - timeB;
+            break;
+          default:
+            break;
+        }
+        return sortOrder === 'ascend' ? compareResult : -compareResult;
+      });
+    }
+    return sorted;
+  }, [resumes, sortField, sortOrder]);
+
   const columns: ColumnsType<AgentEvaluatedResume> = [
     {
       title: '候选人',
@@ -125,6 +250,12 @@ const ScreeningPage = () => {
       key: 'candidate_name',
       width: 150,
       fixed: 'left' as const,
+      sorter: (a: AgentEvaluatedResume, b: AgentEvaluatedResume) => {
+        const nameA = a.candidate_name || '';
+        const nameB = b.candidate_name || '';
+        return nameA.localeCompare(nameB, 'zh-CN');
+      },
+      sortOrder: sortField === 'candidate_name' ? sortOrder : null,
       render: (name: string | null, record: AgentEvaluatedResume) => (
         <div>
           <div style={{ fontWeight: 'bold', fontSize: 14 }}>{name || '未命名'}</div>
@@ -201,8 +332,15 @@ const ScreeningPage = () => {
     },
     {
       title: 'Agent评分',
+      dataIndex: 'agent_score',
       key: 'agent_score',
       width: 120,
+      sorter: (a: AgentEvaluatedResume, b: AgentEvaluatedResume) => {
+        const scoreA = a.agent_score ?? -1;
+        const scoreB = b.agent_score ?? -1;
+        return scoreA - scoreB;
+      },
+      sortOrder: sortField === 'agent_score' ? sortOrder : null,
       render: (_: any, record: AgentEvaluatedResume) => (
         <div>
           {record.agent_score !== null && record.agent_score !== undefined ? (
@@ -245,11 +383,21 @@ const ScreeningPage = () => {
       title: '评估时间',
       dataIndex: 'agent_evaluated_at',
       key: 'agent_evaluated_at',
-      width: 160,
+      width: 120,
+      sorter: (a: AgentEvaluatedResume, b: AgentEvaluatedResume) => {
+        const timeA = a.agent_evaluated_at ? new Date(a.agent_evaluated_at).getTime() : 0;
+        const timeB = b.agent_evaluated_at ? new Date(b.agent_evaluated_at).getTime() : 0;
+        return timeA - timeB;
+      },
+      defaultSortOrder: 'descend' as const,
+      sortOrder: sortField === 'agent_evaluated_at' ? sortOrder : null,
       render: (date: string | null | undefined) => {
-        if (!date) return '-';
-        const d = new Date(date);
-        return d.toLocaleString('zh-CN');
+        const label = getTimeLabel(date);
+        return (
+          <Tooltip title={formatDateTime(date)}>
+            <Tag color={label.color}>{label.text}</Tag>
+          </Tooltip>
+        );
       },
     },
     {
@@ -288,6 +436,18 @@ const ScreeningPage = () => {
           <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
             只显示已配置FastGPT Agent的岗位类别（目前：实施顾问）
           </div>
+          {/* 时间筛选器 */}
+          <div style={{ marginTop: 12 }}>
+            <Space size="middle">
+              <span style={{ color: '#666' }}>筛选:</span>
+              <Radio.Group value={timeRange} onChange={handleTimeRangeChange} buttonStyle="solid">
+                <Radio.Button value="all">全部 <span style={{ color: '#1890ff' }}>({timeStats.all})</span></Radio.Button>
+                <Radio.Button value="today">今天 <span style={{ color: '#ff4d4f' }}>({timeStats.today})</span></Radio.Button>
+                <Radio.Button value="this_week">本周 <span style={{ color: '#faad14' }}>({timeStats.thisWeek})</span></Radio.Button>
+                <Radio.Button value="this_month">本月 <span style={{ color: '#1890ff' }}>({timeStats.thisMonth})</span></Radio.Button>
+              </Radio.Group>
+            </Space>
+          </div>
         </div>
         <Button
           type="default"
@@ -302,7 +462,7 @@ const ScreeningPage = () => {
       <Card>
         <Table
           columns={columns}
-          dataSource={resumes}
+          dataSource={sortedResumes}
           rowKey="id"
           loading={loading}
           pagination={{

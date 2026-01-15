@@ -74,7 +74,8 @@ class EmailService:
     def fetch_unread_emails(
         self,
         filter_keywords: Optional[List[str]] = None,
-        sender_whitelist: Optional[List[str]] = None
+        sender_whitelist: Optional[List[str]] = None,
+        save_path: Optional[str] = None
     ) -> List[Dict]:
         """获取未读邮件
 
@@ -124,7 +125,7 @@ class EmailService:
                     msg = message_from_bytes(raw_email)
 
                     # 提取邮件信息
-                    email_info = self._parse_email(msg, email_id.decode())
+                    email_info = self._parse_email(msg, email_id.decode(), save_path)
 
                     # 统计附件
                     if email_info['attachments']:
@@ -158,7 +159,8 @@ class EmailService:
         self,
         limit: int = 500,
         filter_keywords: Optional[List[str]] = None,
-        sender_whitelist: Optional[List[str]] = None
+        sender_whitelist: Optional[List[str]] = None,
+        save_path: Optional[str] = None
     ) -> List[Dict]:
         """获取已读邮件（最新的N封）
 
@@ -212,7 +214,7 @@ class EmailService:
                     msg = message_from_bytes(raw_email)
 
                     # 提取邮件信息
-                    email_info = self._parse_email(msg, email_id.decode())
+                    email_info = self._parse_email(msg, email_id.decode(), save_path)
 
                     # 统计附件
                     if email_info['attachments']:
@@ -246,7 +248,8 @@ class EmailService:
         self,
         limit: int = 20,
         filter_keywords: Optional[List[str]] = None,
-        sender_whitelist: Optional[List[str]] = None
+        sender_whitelist: Optional[List[str]] = None,
+        save_path: Optional[str] = None
     ) -> List[Dict]:
         """获���最近的N封邮件（包括已读和未读，按时间从近到远）
 
@@ -302,7 +305,7 @@ class EmailService:
                     msg = message_from_bytes(raw_email)
 
                     # 提取邮件信息
-                    email_info = self._parse_email(msg, email_id.decode())
+                    email_info = self._parse_email(msg, email_id.decode(), save_path)
 
                     # 记录邮件基本信息
                     logger.info(
@@ -399,12 +402,13 @@ class EmailService:
         resume_extensions = ('.pdf', '.PDF')
         return decoded_name.endswith(resume_extensions)
 
-    def _parse_email(self, msg: message.Message, email_id: str) -> Dict:
+    def _parse_email(self, msg: message.Message, email_id: str, save_path: str = None) -> Dict:
         """解析邮件
 
         Args:
             msg: 邮件对象
             email_id: 邮件ID
+            save_path: 附件保存路径（如果提供，直接保存PDF附件）
 
         Returns:
             邮件信息字典
@@ -464,11 +468,29 @@ class EmailService:
                     # 解码文件名
                     decoded_filename = self._decode_filename(file_name)
 
+                    # 获取附件内容
+                    attachment_data = part.get_payload(decode=True)
+                    saved_path = None
+
+                    # 如果提供了保存路径，直接保存文件
+                    if save_path and attachment_data:
+                        try:
+                            import os
+                            from pathlib import Path
+                            Path(save_path).mkdir(parents=True, exist_ok=True)
+                            saved_path = os.path.join(save_path, decoded_filename)
+                            with open(saved_path, 'wb') as f:
+                                f.write(attachment_data)
+                            logger.info(f"附件已保存: {saved_path}")
+                        except Exception as e:
+                            logger.error(f"保存附件失败: {e}")
+
                     # 只处理简历文件
                     attachments.append({
                         'filename': decoded_filename,
                         'content_type': part.get_content_type(),
-                        'size': len(part.get_payload(decode=True))
+                        'size': len(attachment_data) if attachment_data else 0,
+                        'saved_path': saved_path  # 新增：已保存的文件路径
                     })
 
         return {
@@ -484,7 +506,7 @@ class EmailService:
         self,
         email_info: Dict,
         filter_keywords: Optional[List[str]] = None,
-        sender_whitelist: Optional[List[str]] = None
+        sender_whitelist: Optional[List[str]] = None,
     ) -> bool:
         """判断是否应该过滤该邮件
 
@@ -527,7 +549,7 @@ class EmailService:
         self,
         email_info: Dict,
         filter_keywords: Optional[List[str]] = None,
-        sender_whitelist: Optional[List[str]] = None
+        sender_whitelist: Optional[List[str]] = None,
     ) -> str:
         """获取邮件被过滤的原因"""
         # 如果没有附件，直接过滤
@@ -623,8 +645,12 @@ class EmailService:
             是否成功
         """
         try:
+            # 对文件夹名进行IMAP UTF-7编码（支持中文）
+            from imapclient.imap_utf7 import encode
+            encoded_folder = encode(folder_name)
+
             # 尝试移动邮件（使用COPY标记）
-            self.client.copy(email_id, folder_name)
+            self.client.copy(email_id, encoded_folder)
             self.client.store(email_id, '+FLAGS', '\\Seen')
             self.client.store(email_id, '+FLAGS', '\\Deleted')
             self.client.expunge()
@@ -638,11 +664,11 @@ class EmailService:
             if 'TRYCREATE' in error_msg or 'not found' in error_msg.lower() or 'cannot' in error_msg.lower():
                 logger.warning(f"文件夹 {folder_name} 不存在，尝试创建...")
                 try:
-                    self.client.create(folder_name)
+                    self.client.create(encoded_folder)
                     logger.info(f"成功创建文件夹 {folder_name}")
 
                     # 重试移动邮件
-                    self.client.copy(email_id, folder_name)
+                    self.client.copy(email_id, encoded_folder)
                     self.client.store(email_id, '+FLAGS', '\\Seen')
                     self.client.store(email_id, '+FLAGS', '\\Deleted')
                     self.client.expunge()

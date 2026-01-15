@@ -80,6 +80,7 @@ export const getScreeningResults = async (params?: {
   result?: string;
   skip?: number;
   limit?: number;
+  time_range?: string;  // 时间范围: today/this_week/this_month
 }): Promise<any> => {
   return api.get('/screening/results', { params });
 };
@@ -102,6 +103,7 @@ export const getResumes = async (params?: {
   min_score?: number;  // 最低Agent评分
   exclude_needs_review?: boolean;  // 排除需要人工审核的简历(raw_text少于100字符)
   needs_review_only?: boolean;  // 只返回需要人工审核的简历
+  time_range?: string;  // 时间范围: today/this_week/this_month
 }): Promise<{ total: number; items: any[]; page?: number; page_size?: number }> => {
   return api.get('/resumes/', { params });
 };
@@ -142,6 +144,33 @@ export const uploadResume = async (file: File, autoMatch: boolean = true): Promi
 /** 删除简历 */
 export const deleteResume = async (id: string): Promise<{ message: string }> => {
   return api.delete(`/resumes/${id}`);
+};
+
+/** 标记简历为需要人工审核 */
+export const markResumeForReview = async (id: string): Promise<{
+  resume_id: string;
+  message: string;
+}> => {
+  return api.post(`/resumes/${id}/mark-for-review`);
+};
+
+// ==================== 邮箱相关API ====================
+
+/** 导入历史邮件（包括已读） */
+export const importHistoricalEmails = async (limit: number = 1000): Promise<{
+  message: string;
+  task_id: string;
+  limit: number;
+}> => {
+  return api.post('/email/import-historical', null, { params: { limit } });
+};
+
+/** 手动触发邮箱检查（未读邮件） */
+export const triggerEmailCheck = async (): Promise<{
+  message: string;
+  task_id: string;
+}> => {
+  return api.post('/email/trigger-check');
 };
 
 /** 获取简历的筛选结果（前2个最佳匹配） */

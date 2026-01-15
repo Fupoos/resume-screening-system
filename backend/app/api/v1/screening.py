@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
 from uuid import UUID
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.core.database import get_db
 from app.models.screening_result import ScreeningResult
@@ -26,7 +26,8 @@ async def list_screening_results(
     job_id: Optional[UUID] = Query(None, description="筛选岗位ID"),
     result: Optional[str] = Query(None, description="筛选结果类型"),
     skip: int = Query(0, ge=0, description="跳过记录数"),
-    limit: int = Query(20, ge=1, le=100, description="返回记录数"),
+    limit: int = Query(20, ge=1, le=1000, description="返回记录数"),
+    time_range: Optional[str] = Query(None, description="时间范围: today/this_week/this_month"),
     db: Session = Depends(get_db)
 ):
     """获取筛选结果列表（只显示已配置FastGPT Agent的岗位类别）
@@ -49,13 +50,29 @@ async def list_screening_results(
         # 如果没有配置FastGPT Agent，返回空结果
         return {"total": 0, "results": []}
 
+    # 🔴 计算时间范围筛选的起始时间（按简历创建时间）
+    time_range_start = None
+    if time_range:
+        now = datetime.utcnow()
+        if time_range == "today":
+            time_range_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif time_range == "this_week":
+            start = now - timedelta(days=now.weekday())
+            time_range_start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif time_range == "this_month":
+            time_range_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
     # 1. 获取所有有效的PDF+正文简历，且job_category在已配置Agent的岗位中
     valid_resumes_query = db.query(Resume).filter(
         Resume.file_type == 'pdf',
         Resume.raw_text.isnot(None),
         Resume.raw_text != '',
-        Resume.job_category.in_(agent_job_names)  # 🔴 新增：只显示已配置Agent的岗位
+        Resume.job_category.in_(agent_job_names)  # 🔴 只显示已配置Agent的岗位
     )
+
+    # 🔴 按简历创建时间筛选
+    if time_range_start:
+        valid_resumes_query = valid_resumes_query.filter(Resume.created_at >= time_range_start)
 
     # 可选过滤：按简历ID
     if resume_id:
@@ -68,7 +85,7 @@ async def list_screening_results(
 
     valid_resume_ids = [r.id for r in valid_resumes]
 
-    # 2. 获取screening_results（已评估的简历）
+    # 2. 获取这些简历的screening_results（已评估的记录）
     screenings_query = db.query(ScreeningResult).filter(
         ScreeningResult.resume_id.in_(valid_resume_ids)
     )
@@ -188,6 +205,8 @@ async def list_screening_results(
                 skills_display = []
 
             # 创建一个待评估记录（不保存到数据库）
+            # 🔴 修复：如果resume上有agent_score，应该显示出来（即使没有screening_results记录）
+            # 这种情况可能是screening_results记录丢失但resume上有评分
             pending_record = {
                 "id": None,  # 没有screening_result ID
                 "resume_id": str(resume_id),
@@ -199,12 +218,12 @@ async def list_screening_results(
                 "job_id": None,  # 未分配岗位
                 "job_name": resume.job_category or "待分类",
                 "job_category": resume.job_category or "unknown",
-                "agent_score": None,
+                "agent_score": resume.agent_score,  # 🔴 修复：使用resume.agent_score而不是None
                 "screening_result": "PENDING",  # 待评估
                 "matched_points": [],
                 "unmatched_points": [],
-                "suggestion": "待评估" if resume.agent_score is None else "未配置Agent",
-                "evaluated": False,  # 🔴 标记为未评估
+                "suggestion": f"Agent评分: {resume.agent_score}分" if resume.agent_score is not None else "待评估",
+                "evaluated": resume.agent_score is not None,  # 🔴 修复：有agent_score就算已评估
                 "created_at": resume.created_at.isoformat() if resume.created_at else None,
                 "work_years": resume.work_years,  # 🔴 新增：工作年限
                 "work_experience": resume.work_experience,  # 🔴 新增：工作经历
@@ -257,7 +276,7 @@ async def list_screening_results(
             "skills": skills_display  # 🔴 新增：技能标签（前3个）
         })
 
-    # 10. 合并已评估和未评估的结果
+    # 10. 合并已评估和未评估的结果（简历已按创建时间筛选，无需再次筛选）
     all_results = evaluated_results_formatted + pending_results
 
     # 11. 分页

@@ -51,7 +51,8 @@ def check_emails():
         # 获取未读邮件
         emails = email_service.fetch_unread_emails(
             filter_keywords=None,  # 不过滤关键词，处理所有带附件的邮件
-            sender_whitelist=[]  # 发件人白名单
+            sender_whitelist=[],  # 发件人白名单
+            save_path=RESUME_SAVE_PATH  # 直接保存附件
         )
 
         logger.info(f"找到 {len(emails)} 封符合条件的未读邮件（已过滤：必须有PDF/DOCX附件）")
@@ -59,7 +60,7 @@ def check_emails():
         # 处理每封邮件
         for idx, email_info in enumerate(emails):
             logger.info(f"准备处理第 {idx+1}/{len(emails)} 封邮件: {email_info['subject'][:50]}... (附件数: {len(email_info['attachments'])})")
-            process_email.delay(email_info, email_config)
+            celery_app.send_task('app.tasks.email_tasks.process_email', args=[email_info, email_config])
 
         # 断开连接
         email_service.disconnect()
@@ -95,17 +96,23 @@ def process_email(email_info: dict, email_config: dict):
                 continue
 
             has_attachments = True
-            # 下载附件
-            file_path = email_service.download_attachment(
-                email_info['id'],
-                file_name,
-                RESUME_SAVE_PATH
-            )
+
+            # 优先使用已保存的路径（在fetch时已保存）
+            file_path = attachment.get('saved_path')
+
+            # 如果没有保存路径，尝试重新下载
+            if not file_path:
+                file_path = email_service.download_attachment(
+                    email_info['id'],
+                    file_name,
+                    RESUME_SAVE_PATH
+                )
 
             if file_path:
-                logger.info(f"附件已下载: {file_path}")
-                # 解析简历
-                parse_resume.delay(file_path, email_info)
+                logger.info(f"使用附件文件: {file_path}")
+                # 解析简历（使用send_task确保任务被正确发送）
+                celery_app.send_task('app.tasks.email_tasks.parse_resume', args=[file_path, email_info])
+                logger.info(f"已触发解析任务: {file_path}")
 
         # 没有PDF附件的邮件跳过处理（符合CLAUDE.md原则2：只保留有PDF+正文的简历）
         if not has_attachments:
@@ -152,40 +159,91 @@ def parse_resume(file_path: str, email_info: dict):
         email_body = email_info.get('body', '')
         resume_data = parser.parse_resume(file_path, email_subject=email_subject)
 
-        # 🔴 验证：确保有正文内容（CLAUDE.md原则2：只保留有PDF+正文的简历）
+        # 🔴 新增：处理无正文内容的简历（保存为需要人工审核）
+        needs_manual_review = False
         if not resume_data.get('raw_text'):
-            logger.warning(f"简历无正文内容，跳过保存: {file_path}")
-            return
+            logger.warning(f"简历无正文内容��将标记为需要人工审核: {file_path}")
+            needs_manual_review = True
+            # 尝试从文件名或邮件主题提取候选人姓名
+            candidate_name = resume_data.get('candidate_name')
+            if not candidate_name:
+                # 从文件名提取姓名
+                import os
+                import re
+                filename = os.path.basename(file_path)
+                # 尝试从文件名中提取中文姓名
+                name_match = re.search(r'([\u4e00-\u9fa5]{2,4})', filename)
+                if name_match:
+                    candidate_name = name_match.group(1)
+                else:
+                    candidate_name = "待补充��名"
+
+            # 设置默认值
+            resume_data['raw_text'] = ""  # 空字符串表示无正文
+            resume_data['skills'] = []
+            resume_data['education'] = None
+            resume_data['work_years'] = 0
+            resume_data['phone'] = None
+            resume_data['email'] = None
 
         logger.info(f"简历解析完成: {resume_data.get('candidate_name')}")
 
-        # 2. 提取城市
-        city_extractor = CityExtractor()
-        city = city_extractor.extract_city(
-            email_subject=email_subject,
-            email_body=email_body,
-            resume_text=resume_data.get('raw_text', '')
-        )
-        logger.info(f"提取城市: {city or '未知'}")
-
         # 3. 判断具体职位（使用字符串匹配，不评分）
-        job_classifier = JobTitleClassifier()
-        job_title = job_classifier.classify_job_title(
-            email_subject=email_subject,
-            resume_text=resume_data.get('raw_text', ''),
-            skills=resume_data.get('skills', []),
-            skills_by_level=resume_data.get('skills_by_level', {})
-        )
-        logger.info(f"判断职位: {job_title}")
+        if not needs_manual_review:
+            job_classifier = JobTitleClassifier()
+            job_title = job_classifier.classify_job_title(
+                email_subject=email_subject,
+                resume_text=resume_data.get('raw_text', ''),
+                skills=resume_data.get('skills', []),
+                skills_by_level=resume_data.get('skills_by_level', {})
+            )
+            logger.info(f"判断职位: {job_title}")
 
-        # 4. 调用外部Agent（唯一评分来源）
-        agent_client = AgentClient()
-        agent_result = agent_client.evaluate_resume(
-            job_title=job_title,
-            city=city,
-            pdf_path=file_path,
-            resume_data=resume_data
-        )
+            # 提取城市
+            city_extractor = CityExtractor()
+            city = city_extractor.extract_city(
+                email_subject=email_subject,
+                email_body=email_body,
+                resume_text=resume_data.get('raw_text', '')
+            )
+            logger.info(f"提取城市: {city or '未知'}")
+
+        # 4. 调用外部Agent（唯一评分来源）- 无正文的简历跳过
+        if needs_manual_review:
+            # 无正文内容，跳过Agent评估，标记为需要人工审核
+            agent_score = None
+            screening_status = 'needs_review'  # 需要人工审核
+            agent_evaluated_at = None
+            agent_result = None
+            job_title = None
+            city = None
+            logger.info(f"简历无正文，跳过Agent评估，标记为需要人工审核")
+        else:
+            # 有正文内容，正常调用Agent评估
+            city_extractor = CityExtractor()
+            city = city_extractor.extract_city(
+                email_subject=email_subject,
+                email_body=email_body,
+                resume_text=resume_data.get('raw_text', '')
+            )
+            logger.info(f"提取城市: {city or '未知'}")
+
+            job_classifier = JobTitleClassifier()
+            job_title = job_classifier.classify_job_title(
+                email_subject=email_subject,
+                resume_text=resume_data.get('raw_text', ''),
+                skills=resume_data.get('skills', []),
+                skills_by_level=resume_data.get('skills_by_level', {})
+            )
+            logger.info(f"判断职位: {job_title}")
+
+            agent_client = AgentClient()
+            agent_result = agent_client.evaluate_resume(
+                job_title=job_title,
+                city=city,
+                pdf_path=file_path,
+                resume_data=resume_data
+            )
 
         # 🔴 新增：处理Agent返回None的情况（未配置FastGPT的职位）
         if agent_result is None:
@@ -233,11 +291,18 @@ def parse_resume(file_path: str, email_info: dict):
         db.commit()
         db.refresh(resume)
 
-        logger.info(f"简历已保存到数据库: {resume.id}")
+        if needs_manual_review:
+            logger.info(f"简历已保存到数据库（需人工审核）: {resume.id}")
+        else:
+            logger.info(f"简历已保存到数据库: {resume.id}")
 
         # ❌ 已删除本地JobMatcher自动匹配（违反核心原则）
 
-        logger.info(f"简历处理完成: {resume.candidate_name}, Agent评分: {agent_result['score']}")
+        # 输出处理完成日志
+        if needs_manual_review:
+            logger.info(f"简历处理完成（需人工审核）: {resume.candidate_name}, 无正文内容")
+        elif agent_result:
+            logger.info(f"简历处理完成: {resume.candidate_name}, Agent评分: {agent_result.get('score', 'N/A')}")
 
     except Exception as e:
         db.rollback()
@@ -376,7 +441,8 @@ def fetch_recent_resumes(limit: int = 20):
             emails = email_service.fetch_recent_emails(
                 limit=fetch_limit,
                 filter_keywords=None,
-                sender_whitelist=[]
+                sender_whitelist=[],
+                save_path=RESUME_SAVE_PATH  # 直接保存附件
             )
 
             logger.info(f"文件夹 {folder_decoded} 中找到 {len(emails)} 封符合条件的邮件")
@@ -462,7 +528,8 @@ def check_new_emails():
         # 只获取未读邮件
         emails = email_service.fetch_unread_emails(
             filter_keywords=None,
-            sender_whitelist=[]
+            sender_whitelist=[],
+            save_path=RESUME_SAVE_PATH  # 直接保存附件
         )
 
         logger.info(f"找到 {len(emails)} 封未读邮件（有PDF/DOCX附件）")

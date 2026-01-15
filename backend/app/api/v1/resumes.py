@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.core.database import get_db
@@ -29,7 +29,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 @router.get("/", response_model=dict)
 def list_resumes(
     skip: int = Query(0, ge=0, description="跳过记录数"),
-    limit: int = Query(10, ge=1, le=500, description="返回记录数"),
+    limit: int = Query(10, ge=1, le=1000, description="返回记录数"),
     status: Optional[str] = Query(None, description="筛选状态"),
     file_type: Optional[str] = Query(None, description="筛选文件类型"),
     has_pdf_and_content: bool = Query(False, description="只返回既有PDF文件又有正文的简历"),
@@ -37,6 +37,7 @@ def list_resumes(
     min_score: Optional[int] = Query(None, description="最低Agent评分"),
     exclude_needs_review: bool = Query(True, description="排除需要人工审核的简历(raw_text少于100字符)"),
     needs_review_only: bool = Query(False, description="只返回需要人工审核的简历"),
+    time_range: Optional[str] = Query(None, description="时间范围: today/this_week/this_month"),
     db: Session = Depends(get_db)
 ):
     """获取简历列表"""
@@ -83,6 +84,23 @@ def list_resumes(
             Resume.raw_text != '',
             db_func.length(Resume.raw_text) > 100
         )
+
+    # 时间范围筛选
+    if time_range:
+        now = datetime.utcnow()
+        if time_range == "today":
+            # 今天00:00开始
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            query = query.filter(Resume.created_at >= start_time)
+        elif time_range == "this_week":
+            # 本周一00:00开始
+            start_time = now - timedelta(days=now.weekday())
+            start_time = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            query = query.filter(Resume.created_at >= start_time)
+        elif time_range == "this_month":
+            # 本月1号00:00开始
+            start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            query = query.filter(Resume.created_at >= start_time)
 
     total = query.count()
 
@@ -334,6 +352,9 @@ def reparse_resume(
         resume.work_experience = parsed_data.get('work_experience', [])
         resume.project_experience = parsed_data.get('project_experience', [])
         resume.education_history = parsed_data.get('education_history', [])
+        # 更新学历和学历等级
+        resume.education = parsed_data.get('education')
+        resume.education_level = parsed_data.get('education_level')
         # 确保work_years不为None，设为0
         work_years = parsed_data.get('work_years', 0)
         resume.work_years = work_years if work_years is not None else 0
@@ -357,6 +378,36 @@ def reparse_resume(
     except Exception as e:
         logger.error(f"重新解析简历失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"重新解析失败: {str(e)}")
+
+
+@router.post("/{resume_id}/mark-for-review", response_model=dict)
+def mark_for_review(
+    resume_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """将简历标记为需要人工审核
+
+    通过设置特殊标记，使简历出现在人工审核页面中
+    """
+    resume = db.query(Resume).filter(Resume.id == resume_id).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="简历不存在")
+
+    # 设置特殊标记，使其被识别为需要人工审核
+    # 长度 <= 100 的 raw_text 会被人工审核页面捕获
+    resume.raw_text = "[NEEDS_MANUAL_REVIEW]"
+    resume.updated_at = datetime.now()
+
+    db.commit()
+    db.refresh(resume)
+
+    logger.info(f"简历已标记为需要人工审核: {resume.id}, 候选人: {resume.candidate_name}")
+
+    return {
+        "resume_id": str(resume.id),
+        "message": "已标记为需要人工审核"
+    }
 
 
 @router.get("/{resume_id}/screenings", response_model=dict)
