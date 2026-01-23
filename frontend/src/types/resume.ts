@@ -18,6 +18,7 @@ export interface Resume {
   skills: string[];
   skills_by_level?: SkillsByLevel;
   status: string;
+  screening_status?: string;  // 筛选状态: pending/不合格/待定/可以发offer/已面试
   file_type: string | null;
   file_path?: string | null;
   raw_text?: string | null;
@@ -27,6 +28,12 @@ export interface Resume {
   created_at: string;
   updated_at: string;
   top_matches?: TopMatch[];
+  city?: string | null;
+  candidate_cities?: string[];
+  job_category?: string | null;
+  agent_score?: number | null;
+  agent_evaluated_at?: string | null;
+  work_experience?: any[];
 }
 
 export interface TopMatch {

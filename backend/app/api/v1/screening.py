@@ -12,9 +12,11 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 
 from app.core.database import get_db
+from app.core.auth import get_current_user
 from app.models.screening_result import ScreeningResult
 from app.models.resume import Resume
 from app.models.job import Job
+from app.models.user import User
 from app.services.university_classifier import classify_education_level
 
 router = APIRouter()
@@ -25,17 +27,21 @@ async def list_screening_results(
     resume_id: Optional[UUID] = Query(None, description="筛选简历ID"),
     job_id: Optional[UUID] = Query(None, description="筛选岗位ID"),
     result: Optional[str] = Query(None, description="筛选结果类型"),
+    screening_status: Optional[str] = Query(None, description="筛选状态: pending/不合格/待定/可以发offer/已面试"),
     skip: int = Query(0, ge=0, description="跳过记录数"),
     limit: int = Query(20, ge=1, le=1000, description="返回记录数"),
     time_range: Optional[str] = Query(None, description="时间范围: today/this_week/this_month"),
+    search: Optional[str] = Query(None, description="搜索候选人姓名"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取筛选结果列表（只显示已配置FastGPT Agent的岗位类别）
+    """获取筛选结果列表（只显示已配置FastGPT Agent的岗位类别，根据用户权限过滤）
 
     根据CLAUDE.md核心原则：
     - 只显示已配置Agent的岗位类别（目前只有实施顾问/consulting）
     - 已评估的简历：显示screening_results数据
     - 未评估的简历：显示为"待评估"(PENDING)
+    - 非管理员用户只显示有权限的岗位类别
     """
     # 0. 🔴 新增：获取所有已配置FastGPT Agent的岗位类别
     agent_jobs = db.query(Job).filter(
@@ -46,33 +52,78 @@ async def list_screening_results(
     # 使用Job的name（中文名称）来过滤简历，因为Resume.job_category存储的是中文名称
     agent_job_names = set(job.name for job in agent_jobs)
 
+    # 权限过滤：管理员看全部，HR用户只看自己有权限的岗位
+    if current_user.role != "admin":
+        from app.models.user import UserJobCategory
+        accessible_categories = db.query(UserJobCategory.job_category_name).filter(
+            UserJobCategory.user_id == current_user.id
+        ).all()
+        user_accessible_names = set(cat[0] for cat in accessible_categories)
+        # 取交集：已配置Agent的岗位 且 用户有权限的岗位
+        agent_job_names = agent_job_names & user_accessible_names
+
     if not agent_job_names:
-        # 如果没有配置FastGPT Agent，返回空结果
+        # 如果没有配置FastGPT Agent或用户无权限，返回空结果
         return {"total": 0, "results": []}
 
-    # 🔴 计算时间范围筛选的起始时间（按简历创建时间）
+    # 🔴 计算时间范围筛选的起始时间（按北京时间UTC+8）
     time_range_start = None
     if time_range:
-        now = datetime.utcnow()
+        from datetime import timezone, timedelta
+        china_tz = timezone(timedelta(hours=8))
+        now = datetime.now(china_tz)
+
         if time_range == "today":
             time_range_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            time_range_start = time_range_start.astimezone(timezone.utc)
         elif time_range == "this_week":
             start = now - timedelta(days=now.weekday())
             time_range_start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+            time_range_start = time_range_start.astimezone(timezone.utc)
         elif time_range == "this_month":
             time_range_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            time_range_start = time_range_start.astimezone(timezone.utc)
 
-    # 1. 获取所有有效的PDF+正文简历，且job_category在已配置Agent的岗位中
+    # 1. 获取所有有效的PDF/DOCX+正文简历，且job_category在已配置Agent的岗位中
     valid_resumes_query = db.query(Resume).filter(
-        Resume.file_type == 'pdf',
+        Resume.file_type.in_(['pdf', 'docx']),
         Resume.raw_text.isnot(None),
         Resume.raw_text != '',
         Resume.job_category.in_(agent_job_names)  # 🔴 只显示已配置Agent的岗位
     )
 
+    # 筛选状态筛选（基于agent_score）
+    if screening_status:
+        if screening_status == "已面试":
+            # 已面试：按 Resume.screening_status 筛选
+            valid_resumes_query = valid_resumes_query.filter(Resume.screening_status == "已面试")
+        elif screening_status == "可以发offer":
+            # 可以发offer：agent_score >= 70
+            valid_resumes_query = valid_resumes_query.filter(Resume.agent_score >= 70)
+        elif screening_status == "待定":
+            # ���定：agent_score >= 40 AND agent_score < 70
+            valid_resumes_query = valid_resumes_query.filter(
+                Resume.agent_score >= 40,
+                Resume.agent_score < 70
+            )
+        elif screening_status == "不合格":
+            # 不合格：agent_score < 40
+            valid_resumes_query = valid_resumes_query.filter(
+                Resume.agent_score < 40
+            )
+        elif screening_status == "pending":
+            # pending（未评估）：agent_score IS NULL
+            valid_resumes_query = valid_resumes_query.filter(Resume.agent_score.is_(None))
+
     # 🔴 按简历创建时间筛选
     if time_range_start:
         valid_resumes_query = valid_resumes_query.filter(Resume.created_at >= time_range_start)
+
+    # 姓名搜索
+    if search:
+        valid_resumes_query = valid_resumes_query.filter(
+            Resume.candidate_name.ilike(f"%{search}%")
+        )
 
     # 可选过滤：按简历ID
     if resume_id:
@@ -207,8 +258,9 @@ async def list_screening_results(
             # 创建一个待评估记录（不保存到数据库）
             # 🔴 修复：如果resume上有agent_score，应该显示出来（即使没有screening_results记录）
             # 这种情况可能是screening_results记录丢失但resume上有评分
+            # 🔴 使用resume_id作为id，确保前端Table的rowKey不重复
             pending_record = {
-                "id": None,  # 没有screening_result ID
+                "id": str(resume_id),  # 使用resume_id作为id，避免rowKey重复
                 "resume_id": str(resume_id),
                 "candidate_name": resume.candidate_name,
                 "candidate_email": resume.email,
@@ -220,6 +272,7 @@ async def list_screening_results(
                 "job_category": resume.job_category or "unknown",
                 "agent_score": resume.agent_score,  # 🔴 修复：使用resume.agent_score而不是None
                 "screening_result": "PENDING",  # 待评估
+                "screening_status": resume.screening_status,  # 新增：筛选状态
                 "matched_points": [],
                 "unmatched_points": [],
                 "suggestion": f"Agent评分: {resume.agent_score}分" if resume.agent_score is not None else "待评估",
@@ -227,7 +280,8 @@ async def list_screening_results(
                 "created_at": resume.created_at.isoformat() if resume.created_at else None,
                 "work_years": resume.work_years,  # 🔴 新增：工作年限
                 "work_experience": resume.work_experience,  # 🔴 新增：工作经历
-                "skills": skills_display  # 🔴 新增：技能标签（前3个）
+                "skills": skills_display,  # 🔴 新增：技能标签（前3个）
+                "city": resume.city,  # 新增：城市
             }
             pending_results.append(pending_record)
 
@@ -266,6 +320,7 @@ async def list_screening_results(
             "job_category": job.name if job else (resume.job_category or "unknown"),  # 🔴 修复：返回中文岗位类别
             "agent_score": screening.agent_score,
             "screening_result": screening.screening_result,
+            "screening_status": resume.screening_status,  # 新增：筛选状态
             "matched_points": screening.matched_points or [],
             "unmatched_points": screening.unmatched_points or [],
             "suggestion": screening.suggestion,
@@ -273,7 +328,8 @@ async def list_screening_results(
             "created_at": screening.created_at.isoformat() if screening.created_at else None,
             "work_years": resume.work_years,  # 🔴 新增：工作年限
             "work_experience": resume.work_experience,  # 🔴 新增：工作经历
-            "skills": skills_display  # 🔴 新增：技能标签（前3个）
+            "skills": skills_display,  # 🔴 新增：技能标签（前3个）
+            "city": resume.city,  # 新增：城市
         })
 
     # 10. 合并已评估和未评估的结果（简历已按创建时间筛选，无需再次筛选）

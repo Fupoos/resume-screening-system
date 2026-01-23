@@ -41,13 +41,40 @@ class ResumeParser:
             return {}
 
     def _parse_pdf(self, file_path: str, email_subject: Optional[str] = None) -> Dict:
-        """解析PDF简历 - 增强版（PyMuPDF主 + pdfplumber备）"""
+        """解析PDF简历 - 使用pymupdf-layout布局感知解析
+
+        策略优先级：
+        1. pymupdf4llm (布局感知，主要) - 更好地处理复杂布局、表格、分栏等
+        2. 原生PyMuPDF (fallback) - 基础文本提取
+        3. pdfplumber (最后备选) - 兼容性方案
+        """
         from app.utils.text_cleaner import TextCleaner
 
-        # 策略1: PyMuPDF (主要) - 更好的中文支持
+        # 策略1: pymupdf4llm (布局感知，主要)
+        try:
+            import pymupdf4llm
+
+            logger.info(f"使用pymupdf4llm解析PDF: {file_path}")
+
+            # 转换为Markdown（保留格式，有助于理解文档结构）
+            # pymupdf4llm 会自动使用布局功能（如果 pymupdf 版本支持）
+            md_text = pymupdf4llm.to_markdown(file_path)
+
+            # 清理文本
+            text = TextCleaner.clean_text(md_text)
+            logger.info(f"pymupdf4llm解析完成，文本长度: {len(text)} 字符")
+
+            return self._parse_text(text, email_subject=email_subject, filename=file_path)
+
+        except ImportError:
+            logger.warning("pymupdf4llm未安装，使用原生PyMuPDF作为fallback")
+        except Exception as e:
+            logger.warning(f"pymupdf4llm解析失败: {e}，尝试fallback方案")
+
+        # 策略2: 原生PyMuPDF (fallback)
         try:
             import fitz  # PyMuPDF
-            logger.info(f"使用PyMuPDF解析PDF: {file_path}")
+            logger.info(f"使用原生PyMuPDF解析PDF: {file_path}")
 
             text = ""
             with fitz.open(file_path) as doc:
@@ -58,14 +85,14 @@ class ResumeParser:
 
             # 清理文本
             text = TextCleaner.clean_text(text)
-            logger.info(f"PyMuPDF解析完成，文本长度: {len(text)} 字符")
+            logger.info(f"原生PyMuPDF解析完成，文本长度: {len(text)} 字符")
 
             return self._parse_text(text, email_subject=email_subject, filename=file_path)
 
         except ImportError:
-            logger.warning("PyMuPDF未安装，使用pdfplumber作为fallback")
+            logger.warning("PyMuPDF未安装，尝试pdfplumber作为最后备选")
 
-        # 策略2: pdfplumber (fallback)
+        # 策略3: pdfplumber (最后备选)
         try:
             import pdfplumber
             logger.info(f"使用pdfplumber解析PDF: {file_path}")
@@ -83,7 +110,7 @@ class ResumeParser:
             return self._parse_text(text, email_subject=email_subject, filename=file_path)
 
         except ImportError:
-            logger.error("PDF解析库未安装（PyMuPDF和pdfplumber都不可用）")
+            logger.error("PDF解析库未安装（pymupdf4llm、PyMuPDF和pdfplumber都不可用）")
             return {}
         except Exception as e:
             logger.error(f"PDF解析失败: {e}")
@@ -160,13 +187,18 @@ class ResumeParser:
         # 提取教育背景
         result['education_history'] = self._extract_education(text)
         if result['education_history']:
-            # 标准化学历映射（学士→本科等）
+            # 标准化学历映射（学士→本科等，包含英文）
             degree_mapping = {
                 '博士研究生': '博士', '博士': '博士',
                 '硕士研究生': '硕士', '硕士': '硕士',
                 '学士': '本科', '本科': '本科',
                 '大专': '大专', '专科': '大专',
-                '高中': '高中', '中专': '高中'
+                '高中': '高中', '中专': '高中',
+                # 英文学历映射
+                'Ph.D': '博士', 'PhD': '博士', 'Doctor': '博士', 'Doctorate': '博士',
+                'Master': '硕士', 'Masters': '硕士', 'M.B.A': '硕士', 'MBA': '硕士',
+                'Bachelor': '本科', 'Bachelors': '本科', 'B.S': '本科', 'B.A': '本科', 'B.Sc': '本科', 'BBA': '本科',
+                'Associate': '大专', 'College': '大专'
             }
 
             # 取最高学历
@@ -230,11 +262,18 @@ class ResumeParser:
                         logger.info(f"从基本信息提取学历：{result['education']}")
                     break
 
+        # 优先级1: 从邮件主题提取工作年限（第一优先级）
+        if email_subject and result['work_years'] is None:
+            work_years_from_subject = self._extract_work_years_from_subject(email_subject)
+            if work_years_from_subject is not None:
+                result['work_years'] = work_years_from_subject
+                logger.info(f"从邮件主题提取工作年限: {result['work_years']}年")
+
         # 提取工作经历
         result['work_experience'] = self._extract_work_experience(text)
 
-        # 计算工作年限
-        if result['work_experience']:
+        # 优先级2: 只有当邮件主题没有提取到工作年限时，才从工作经历计算
+        if result['work_years'] is None and result['work_experience']:
             result['work_years'] = self._calculate_work_years(result['work_experience'])
 
         # 提取项目经历
@@ -249,6 +288,10 @@ class ResumeParser:
             skills_with_levels['mentioned']
         )
         result['skills_by_level'] = skills_with_levels  # 存储供后续使用
+
+        # 如果工作年限仍未确定，设为0
+        if result['work_years'] is None:
+            result['work_years'] = 0
 
         return result
 
@@ -459,7 +502,7 @@ class ResumeParser:
                     break  # 只检查第一个部分
 
         # 模式4: 在联系方式附近查找姓名（邮箱/电话前后）
-        common_surname_chars = set('赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉��薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董粱杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍万柯卢莫房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉钮龚')
+        common_surname_chars = set('赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董粱杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍万柯卢莫房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉钮龚虞乔童游迟湛闻鲍庞逄党蓝牟裘牛农曲刘付白范郝邵叶勤肖詹陶翟邝佟仲景覃')
         for i, line in enumerate(lines):
             line = line.strip()
             # 查找包含邮箱或电话号码的行
@@ -475,6 +518,16 @@ class ResumeParser:
                         if name not in blacklist and name[0] in common_surname_chars:
                             if self._is_valid_name(name, blacklist):
                                 return name
+
+                # 检查后1-5行是否有"姓名:xxx"格式
+                for j in range(i+1, min(len(lines), i+6)):
+                    check_line = lines[j].strip()
+                    # 匹配 "姓名:xxx" 或 "姓名：xxx" 格式
+                    match = re.search(r'姓\s*名\s*[:：]\s*([^\s:：|]{2,4})', check_line)
+                    if match:
+                        name = match.group(1).strip()
+                        if self._is_valid_name(name, blacklist):
+                            return name
 
         return None
 
@@ -495,8 +548,15 @@ class ResumeParser:
         if len(name) < 2 or len(name) > 4:
             return False
 
-        # 检查首字是否为常见姓氏（百家姓 + 常见复姓）
-        common_surnames = set('赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董粱杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍万柯卢莫房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉钮程')
+        # 检查首字是否为常见姓��（百家姓 + 常见复姓 + 更多常见姓氏）
+        common_surnames = set('赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董粱杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍万柯卢莫房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉钮程虞乔童游迟湛闻鲍庞逄党蓝牟裘牛农曲刘付白范郝邵叶勤易晏柯仝蔡贺崔廖江关霍邢程阎余潘游戴欧阳司马上官诸葛夏侯东方皇甫尉迟公羊穆可司徒端木')
+        # 添加更多现代常见姓氏
+        more_surnames = set('易蔡尹于袁邵葛汪田莫雷黎崔盖郝卢安戴严杜季萧饶贾童侯孟邹廖谭熊金陆郝孔白崔康毛邱秦江史顾石郝贾薛林魏吕梁唐马冯许吴何谢曹彭郑潘邢谭姚冯魏董于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石贾顾韦付彭夏韦傅莫方汤姜黎常武乔贺赖龚文庞樊兰殷陶施洪洪崔岳苗秦江池范苑耿覃阿卜')
+        # 添加简化姓氏和其他常见姓氏
+        extra_surnames = set('肖詹陶翟邝佟仲景詹覃桂卜仇全但郇麦嵇荀邴查党隋巢茆莒邴揭雒冼幸邴胥宓蓬荪訾能隗靳郇蓟蔺鄢邴蒯宿邴邴辛奚柏洪穆傅燕段')  # 萧->肖, 詹陶翟邝佟仲景覃等少见姓氏 + 辛奚柏洪段等
+
+        common_surnames.update(more_surnames)
+        common_surnames.update(extra_surnames)
         if name[0] not in common_surnames:
             return False
 
@@ -656,9 +716,10 @@ class ResumeParser:
                 logger.info(f"从文件名提取姓名（姓名备注格式）: {basename} → {name}")
                 return name
 
-        # ========== 模式3: "职位-姓名（备注）"（最常见）==========
+        # ========== 模式3: "职位-姓名（备注）-其他" 或 "职位-姓名（备注）"（最常见）==========
         # 例如："财务信息化顾问-李景昱（中）"
-        match = re.search(r'-([\u4e00-\u9fa5]{2,4})(?:（[^）]*）)?$', basename)
+        # 例如："市场运营助理-刘悦（中）.pdf"
+        match = re.search(r'-([\u4e00-\u9fa5]{2,4})(?:（[^）]*）)?(?:-|$|\.)', basename)
         if match:
             name = match.group(1).strip()
             if self._is_valid_name(name, blacklist):
@@ -680,12 +741,84 @@ class ResumeParser:
             if self._is_valid_name(name, blacklist):
                 return name
 
-        # ========== 模式5: 纯姓名（只有2-4个汉字）==========
+        # ========== 模式5: "姓名_其他信息"格式 ==========
+        # 例如："彭坤_本科_Java开发工程师.pdf"
+        match = re.search(r'^([\u4e00-\u9fa5]{2,4})_', basename)
+        if match:
+            name = match.group(1).strip()
+            if self._is_valid_name(name, blacklist):
+                logger.info(f"从文件名提取姓名（姓名_其他格式）: {basename} → {name}")
+                return name
+
+        # ========== 模式6: 纯姓名（只有2-4个汉字）==========
         # 例如："王五.pdf"
         if re.match(r'^[\u4e00-\u9fa5]{2,4}$', basename):
             name = basename.strip()
             if self._is_valid_name(name, blacklist):
                 return name
+
+        return None
+
+    def _extract_work_years_from_subject(self, subject: str) -> Optional[int]:
+        """从邮件主题中提取工作年限
+
+        支持格式：
+        - "张三 | 10年以上，应聘 销售总监"
+        - "Java开发工程师-李四-2年经验"
+        - "产品经理-王五-5年"
+        - "应届生" → 返回 0
+        - "24年毕业" → 返回 0（应届生）
+
+        Returns:
+            工作年限（年数），应届生返回0，无法提取返回None
+        """
+        if not subject:
+            return None
+
+        # 优先级1: 检查"应届生"关键词
+        if '应届生' in subject or '应届毕业生' in subject:
+            logger.info(f"从邮件主题识别为应届生")
+            return 0
+
+        # 优先级2: 检查"XX年毕业"格式（应届生）
+        # 例如: "24年毕业"、"2024年毕业"、"26年毕业"
+        match = re.search(r'(\d{2}|\d{4})\s*年\s*毕业', subject)
+        if match:
+            logger.info(f"从邮件主题识别为应届生（XX年毕业格式）")
+            return 0
+
+        # 模式1: "X年以上"
+        match = re.search(r'(\d+)\s*年\s*以上', subject)
+        if match:
+            years = int(match.group(1))
+            logger.info(f"从邮件主题提取工作年限: {years}年以上")
+            return years
+
+        # 模式2: "X年经验"
+        match = re.search(r'(\d+)\s*年\s*经验', subject)
+        if match:
+            years = int(match.group(1))
+            logger.info(f"从邮件主题提取工作年限: {years}年经验")
+            return years
+
+        # 模式3: "X年" (单独的数字+年，排除年份如2024年)
+        # 但排除"毕业"关键词
+        match = re.search(r'(\d+)\s*年(?![以经])', subject)
+        if match:
+            # 检查这个"X年"是否与"毕业"相关
+            # 先看看上下文是否有"毕业"
+            before_match = subject[:match.start()]
+            after_match = subject[match.end():match.end()+10]
+            if '毕业' in before_match or '毕业' in after_match:
+                # 这是"XX年毕业"格式，应该是应届生
+                logger.info(f"从邮件主题识别为应届生（XX年毕业格式）")
+                return 0
+
+            years = int(match.group(1))
+            # 排除年份（如2024年）和过大的数字
+            if 1 <= years <= 50:  # 工作年限一般在1-50年之间
+                logger.info(f"从邮件主题提取工作年限: {years}年")
+                return years
 
         return None
 
@@ -712,18 +845,26 @@ class ResumeParser:
         education_list = []
 
         # 教育背景关键词（用于定位教育背景段落，不包含"学历"因为"学历"可能出现在数据行中）
-        keywords = ['教育背景', '学习经历', '教育经历', '学历背景', '专业背景']
+        keywords = ['教育背景', '学习经历', '教育经历', '学历背景', '专业背景', 'EDUCATIONAL BACKGROUND', 'EDUCATION', 'EDUCATION HISTORY']
 
-        # 学历关键词（用于提取学历）- 按优先级排序
-        degree_keywords = ["博士研究生", "博士", "硕士研究生", "硕士", "学士", "本科", "大专", "专科", "高中", "中专"]
+        # 学历关键词（用于提取学历）- 按优先级排序（中英文双语）
+        degree_keywords = ["博士研究生", "博士", "硕士研究生", "硕士", "学士", "本科", "大专", "专科", "高中", "中专",
+                          "Ph.D", "PhD", "Doctor", "Doctorate",  # 英文博士
+                          "Master", "Masters", "M.B.A", "MBA",  # 英文硕士
+                          "Bachelor", "Bachelors", "B.S", "B.A", "B.Sc", "BBA",  # 英文本科
+                          "Associate", "College"]  # 英文大专
 
-        # 学历正则模式（支持括号格式，包括带前缀的如"(工学硕士)"）
+        # 学历正则模式（支持括号格式，包括带前缀的如"(工学硕士)"，以及英文格式）
         degree_patterns = [
+            # 中文模式
             r'\((?:[^\)]*?)?(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)\)',  # (本科)或(工学硕士)
             r'（(?:[^）]*?)?(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)）',  # （本科）或（工学硕士）
             r'\s(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)\s',  # 空格包围
             r'/(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)',  # /本科
             r'\|(博士研究生|博士|硕士研究生|硕士|学士|本科|大专|专科|高中|中专)',  # |本科
+            # 英文模式
+            r'\b(Ph\.D|PhD|Doctor|Doctorate|Masters?|Master|M\.B\.A|MBA|Bachelors?|Bachelor|B\.S|B\.A|B\.Sc|BBA|Associate|College)\b',  # 英文学历
+            r'/(Masters?|Master|Bachelors?|Bachelor|Ph\.D|PhD)',  # /Master or /Bachelor
         ]
 
         lines = text.split('\n')
@@ -1736,38 +1877,97 @@ class ResumeParser:
                     time_lines[i] = match.group(0)
                     break
 
-        # 第二步：对每个时间行，向前查找公司名和职位
+        # 第二步：对每个时间行，提取公司名和职位
         processed_indices = set()  # 记录已处理的行索引
+        # section header黑名单（不应当被误识别为公司名）
+        section_headers = {'工作经历', '项目经历', '项目经验', '实习经历', '实习工作',
+                           '教育背景', '教育经历', '学习经历', '技能', '专业技能',
+                           '联系方式', '自我评价', '个人优势', '获奖情况', '证书'}
+
         for time_idx in sorted(time_lines.keys()):
             if time_idx in processed_indices:
                 continue
 
             duration = time_lines[time_idx]
+            time_line = lines[time_idx].strip()
 
-
-            # 向前查找公司名和职位（范围：前5行）
+            # 优先策略：从时间行本身提取公司名和职位
+            # 格式：公司 职位 时间（如"百望股份有限公司 销售经理 2023.05-2025.09"）
             company = ''
             position = ''
-            search_back_start = max(search_start, time_idx - 5)
 
-            for j in range(time_idx - 1, search_back_start - 1, -1):
-                if j in processed_indices:
-                    break  # 遇到已处理的工作经历，停止
+            # 先尝试从时间行提取
+            time_line_clean = time_line
+            for pattern in time_patterns:
+                time_line_clean = re.sub(pattern, '', time_line_clean).strip()
 
-                line = lines[j].strip()
-                if not line:
-                    continue
+            if time_line_clean and len(time_line_clean) > 3:
+                # 分析时间行剩余内容，提取公司和职位
+                # 尝试分离：最后一部分通常是职位，前面是公司
+                parts = time_line_clean.split()
 
-                work_desc_prefixes = ['负责', '协助', '主导', '参与', '完成', '执行',
-                                     '开展', '跟进', '管理', '策划', '设计', '开发']
-                if any(line.startswith(prefix) for prefix in work_desc_prefixes):
-                    continue
+                # 检查是否包含职位关键词（作为分隔点）
+                position_idx = -1
+                for i, part in enumerate(parts):
+                    for pk in position_keywords:
+                        if pk in part:
+                            position_idx = i
+                            # 提取完整职位（可能包含多个词）
+                            position_candidate = ' '.join(parts[i:])
+                            # 验证：如果后面紧跟时间格式，那这不是职位
+                            has_time_after = False
+                            for pattern in time_patterns:
+                                if re.search(pattern, ' '.join(parts[i:])):
+                                    has_time_after = True
+                                    break
+                            if not has_time_after:
+                                position = part
+                                # 职位之前的是公司名
+                                company_candidate = ' '.join(parts[:i]).strip()
+                                if company_candidate and len(company_candidate) > 2:
+                                    company = company_candidate
+                            break
+                    if position:
+                        break
 
-                # 跳过明显不是公司名的行
-                skip_patterns = ['项目职责', '项目业绩', '主要职责', '工作内容', '业绩',
-                               '求职意向', '期望薪资', '期望城市']
-                if any(skip in line for skip in skip_patterns):
-                    continue
+                # 如果没找到职位，尝试其他方式
+                if not company and not position:
+                    # 检查是否包含公司关键词
+                    if any(re.search(p, time_line_clean) for p in company_patterns):
+                        # 有公司关键词，整个内容可能是公司名
+                        company = time_line_clean
+                    elif 3 < len(time_line_clean) < 60:
+                        # 适中长度，可能是公司名
+                        # 排除纯描述性文本
+                        if not any(time_line_clean.startswith(w) for w in ['负责', '内容', '业绩', '描述']):
+                            company = time_line_clean
+
+            # 如果时间行没有提取到公司名，向前查找
+            if not company:
+                search_back_start = max(search_start, time_idx - 5)
+
+                for j in range(time_idx - 1, search_back_start - 1, -1):
+                    if j in processed_indices:
+                        break  # 遇到已处理的工作经历，停止
+
+                    line = lines[j].strip()
+                    if not line:
+                        continue
+
+                    # 跳过section header（关键修复）
+                    if line in section_headers:
+                        continue
+
+                    work_desc_prefixes = ['负责', '协助', '主导', '参与', '完成', '执行',
+                                         '开展', '跟进', '管理', '策划', '设计', '开发']
+                    if any(line.startswith(prefix) for prefix in work_desc_prefixes):
+                        continue
+
+                    # 跳过明显不是公司名的行
+                    skip_patterns = ['项目职责', '项目业绩', '主要职责', '工作内容', '业绩',
+                                   '求职意向', '期望薪资', '期望城市', '内容', '描述']
+                    if any(skip in line for skip in skip_patterns):
+                        continue
 
                 # 检查是否是公司名（放宽条件）
                 if not company:
@@ -1794,16 +1994,7 @@ class ResumeParser:
                             position = keyword
                             break
 
-            # 如果没找到公司名，尝试从时间行本身提取
-            time_line = lines[time_idx].strip()
-            if not company:
-                # 去掉时间部分，看是否有公司名
-                company_part = time_line
-                for pattern in time_patterns:
-                    company_part = re.sub(pattern, '', company_part).strip()
-                if company_part and any(re.search(p, company_part) for p in company_patterns):
-                    company = company_part
-
+            # 过滤教育相关和实习经历
             is_education_related = False
             if company:
                 # 检查是否匹配非工作模式

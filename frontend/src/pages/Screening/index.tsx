@@ -3,8 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Card, Table, Tag, Button, message, Tooltip, Radio, Space } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { JOB_CATEGORY_COLORS } from '../../types';
-import { getScreeningResults } from '../../services/api';
+import { getScreeningResults, markInterviewed } from '../../services/api';
 
 interface AgentEvaluatedResume {
   id: string | null;
@@ -13,25 +12,24 @@ interface AgentEvaluatedResume {
   candidate_email: string | null;
   candidate_phone: string | null;
   candidate_education: string | null;
-  education_level?: string | null;  // 🔴 新增：学历等级（985/211/QS前50等）
+  education_level?: string | null;
   job_id: string | null;
   job_name: string;
   job_category: string;
-  agent_score: number | null;  // Agent评分
-  screening_result: string;  // "CAN_HIRE" | "PENDING" | "REJECTED" | "PENDING_REVIEW"
+  agent_score: number | null;
+  screening_result: string;
   matched_points: string[];
   unmatched_points: string[];
   suggestion: string;
-  evaluated: boolean;  // 是否已评估
+  evaluated: boolean;
   created_at: string;
-  // 为了兼容旧代码，添加字段映射
   phone?: string | null;
   email?: string | null;
   work_years?: number | null;
   skills?: string[];
   city?: string | null;
-  screening_status?: string | null;  // 映射到screening_result
-  agent_evaluated_at?: string | null;  // 映射到created_at
+  screening_status?: string | null;
+  agent_evaluated_at?: string | null;
 }
 
 const ScreeningPage = () => {
@@ -42,21 +40,19 @@ const ScreeningPage = () => {
     pageSize: 50,
     total: 0,
   });
-  const [timeRange, setTimeRange] = useState<string>('all'); // 'all' | 'today' | 'this_week' | 'this_month'
+  const [timeRange, setTimeRange] = useState<string>('all');
   const [timeStats, setTimeStats] = useState({ today: 0, thisWeek: 0, thisMonth: 0, all: 0 });
+  const [screeningStatus, setScreeningStatus] = useState<string>('all'); // 'all' | 'interviewed' | 'pass' | 'pending' | 'fail'
   const [sortField, setSortField] = useState<string>('agent_evaluated_at');
   const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | null>('descend');
 
-  // 加载通过Agent评估的简历
+  // 加载简历
   useEffect(() => {
     loadResumes();
-
-    // 设置自动刷新，每30秒刷新一次
     const interval = setInterval(() => {
       loadResumes(pagination.current, pagination.pageSize);
-    }, 30000); // 30秒
-
-    return () => clearInterval(interval); // 清理定时器
+    }, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // 监听时间范围变化
@@ -68,27 +64,21 @@ const ScreeningPage = () => {
     setLoading(true);
     try {
       const skip = (page - 1) * pageSize;
-      // 🔴 修改：调用筛选结果API，只显示已配置FastGPT Agent的岗位类别（目前只有实施顾问）
       const params: any = { skip, limit: pageSize };
-      // 添加时间范围筛选
       if (timeRange !== 'all') {
         params.time_range = timeRange;
       }
       const data = await getScreeningResults(params);
 
-      // 适配数据格式：results -> items
       const results = data.results || [];
-
-      // 同时更新统计数据
       fetchTimeStats();
 
-      // 为了兼容旧代码，添加字段映射
       const adaptedResults = results.map((item: any) => ({
         ...item,
         phone: item.candidate_phone,
         email: item.candidate_email,
-        screening_status: item.screening_result,  // 用screening_result作为screening_status
-        agent_evaluated_at: item.created_at,  // 用created_at作为agent_evaluated_at
+        screening_status: item.screening_status || item.screening_result,
+        agent_evaluated_at: item.created_at,
       }));
 
       setResumes(adaptedResults);
@@ -105,116 +95,102 @@ const ScreeningPage = () => {
   };
 
   const handleTableChange = (newPagination: any, _filters: any, sorter: any) => {
-    // 处理排序（前端排序）
     if (sorter && !Array.isArray(sorter)) {
       setSortField(sorter.field);
       setSortOrder(sorter.order as 'ascend' | 'descend' | null);
     }
-
-    // 只在分页变化时重新加载数据
     const pageChanged = newPagination.current !== pagination.current;
     const pageSizeChanged = newPagination.pageSize !== pagination.pageSize;
-
     if (pageChanged || pageSizeChanged) {
       loadResumes(newPagination.current, newPagination.pageSize);
     }
   };
 
-  // 时间范围变化处理
   const handleTimeRangeChange = (e: any) => {
     setTimeRange(e.target.value);
   };
 
-  // 时间标签函数
+  const handleMarkInterviewed = async (resumeId: string, name: string) => {
+    try {
+      const result = await markInterviewed(resumeId);
+      message.success(result.message || `已将"${name}"标记为已面试`);
+      loadResumes(pagination.current, pagination.pageSize);
+    } catch (error) {
+      message.error('操作失败');
+    }
+  };
+
   const getTimeLabel = (createdAt: string | null | undefined) => {
     if (!createdAt) return { text: '-', color: 'default' };
-
     const date = new Date(createdAt);
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const thisWeekStart = new Date(today);
-    thisWeekStart.setDate(today.getDate() - today.getDay()); // 周日作为本周开始
+    thisWeekStart.setDate(today.getDate() - today.getDay());
     const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    if (date >= today) {
-      return { text: '今天', color: 'red' };
-    } else if (date >= thisWeekStart) {
-      return { text: '本周', color: 'gold' };
-    } else if (date >= thisMonthStart) {
-      return { text: '本月', color: 'blue' };
-    } else {
-      // 显示具体日期
-      return {
-        text: `${date.getMonth() + 1}-${date.getDate()}`,
-        color: 'default'
-      };
-    }
+    if (date >= today) return { text: '今天', color: 'red' };
+    else if (date >= thisWeekStart) return { text: '本周', color: 'gold' };
+    else if (date >= thisMonthStart) return { text: '本月', color: 'blue' };
+    else return { text: `${date.getMonth() + 1}-${date.getDate()}`, color: 'default' };
   };
 
-  // 格式化完整时间
   const formatDateTime = (dateStr: string | null | undefined) => {
     if (!dateStr) return '-';
     const date = new Date(dateStr);
     return `${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
   };
 
-  // 获取各时间范围的统计数据
   const fetchTimeStats = async () => {
     try {
-      // 获取全部数量
       const allData = await getScreeningResults({ limit: 1 });
-      const allTotal = allData.total || 0;
-
-      // 获取今天的数量
       const todayData = await getScreeningResults({ limit: 1, time_range: 'today' });
-      const todayTotal = todayData.total || 0;
-
-      // 获取本周的数量
       const weekData = await getScreeningResults({ limit: 1, time_range: 'this_week' });
-      const weekTotal = weekData.total || 0;
-
-      // 获取本月的数量
       const monthData = await getScreeningResults({ limit: 1, time_range: 'this_month' });
-      const monthTotal = monthData.total || 0;
-
       setTimeStats({
-        all: allTotal,
-        today: todayTotal,
-        thisWeek: weekTotal,
-        thisMonth: monthTotal
+        all: allData.total || 0,
+        today: todayData.total || 0,
+        thisWeek: weekData.total || 0,
+        thisMonth: monthData.total || 0,
       });
     } catch (error) {
       console.error('获取统计数据失败:', error);
     }
   };
 
-  // 获取筛选状态标签颜色
-  const getStatusColor = (_status: string | null, score: number | null) => {
-    if (score === null) return 'default';
-    if (score >= 70) return 'success';  // 绿色 - 可以发offer
-    if (score >= 40) return 'warning';  // 黄色 - 待定
-    return 'error';  // 红色 - 不合格
-  };
-
-  // 获取筛选状态文本
-  const getStatusText = (_status: string | null, score: number | null) => {
-    if (score === null) return '待评估';
-    if (score >= 70) return '可以进入面试';  // 🔴 修改：从"可以发offer"改为"可以进入面试"
-    if (score >= 40) return '待定';
-    return '不合格';
-  };
-
-  // 获取分数颜色
   const getScoreColor = (score: number | null) => {
     if (score === null) return '#999';
-    if (score >= 70) return '#52c41a';  // 绿色
-    if (score >= 40) return '#faad14';  // 黄色
-    return '#f5222d';  // 红色
+    if (score >= 70) return '#52c41a';
+    if (score >= 40) return '#faad14';
+    return '#f5222d';
   };
 
-  // 对数据进行排序
   const sortedResumes = useMemo(() => {
-    const sorted = [...resumes];
+    let sorted = [...resumes];
+
+    // 前端按状态筛选
+    if (screeningStatus !== 'all') {
+      sorted = sorted.filter((item) => {
+        const score = item.agent_score;
+
+        if (screeningStatus === 'interviewed') {
+          // 已面试
+          return item.screening_status === '已面试';
+        } else if (screeningStatus === 'pass') {
+          // 可以进行面试：agent_score >= 70
+          return score !== null && score >= 70;
+        } else if (screeningStatus === 'pending') {
+          // 待定：40 <= agent_score < 70
+          return score !== null && score >= 40 && score < 70;
+        } else if (screeningStatus === 'fail') {
+          // 不合格：agent_score < 40
+          return score !== null && score < 40;
+        }
+        return true;
+      });
+    }
+
+    // 排序
     if (sortField && sortOrder) {
       sorted.sort((a, b) => {
         let compareResult = 0;
@@ -241,7 +217,10 @@ const ScreeningPage = () => {
       });
     }
     return sorted;
-  }, [resumes, sortField, sortOrder]);
+  }, [resumes, sortField, sortOrder, screeningStatus]);
+
+  // 计算筛选后的总数（用于分页显示）
+  const filteredTotal = screeningStatus === 'all' ? pagination.total : sortedResumes.length;
 
   const columns: ColumnsType<AgentEvaluatedResume> = [
     {
@@ -273,16 +252,12 @@ const ScreeningPage = () => {
       render: (_: any, record: AgentEvaluatedResume) => (
         <div>
           {record.job_category ? (
-            <Tag color={JOB_CATEGORY_COLORS[record.job_category as keyof typeof JOB_CATEGORY_COLORS]} style={{ fontSize: 12 }}>
-              {record.job_category}
-            </Tag>
+            <Tag color="blue" style={{ fontSize: 12 }}>{record.job_category}</Tag>
           ) : (
             <span style={{ color: '#999' }}>未分类</span>
           )}
           {record.city && (
-            <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
-              {record.city}
-            </div>
+            <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>{record.city}</div>
           )}
         </div>
       ),
@@ -295,9 +270,7 @@ const ScreeningPage = () => {
         <div>
           <div style={{ marginBottom: 4 }}>
             {record.candidate_education && record.education_level ? (
-              <>
-                {record.candidate_education}/{record.education_level}
-              </>
+              <>{record.candidate_education}/{record.education_level}</>
             ) : record.candidate_education || '-'}
           </div>
           <div style={{ fontSize: 12, color: '#999' }}>
@@ -345,11 +318,7 @@ const ScreeningPage = () => {
         <div>
           {record.agent_score !== null && record.agent_score !== undefined ? (
             <div style={{ display: 'flex', alignItems: 'center' }}>
-              <span style={{
-                fontSize: 24,
-                fontWeight: 'bold',
-                color: getScoreColor(record.agent_score)
-              }}>
+              <span style={{ fontSize: 24, fontWeight: 'bold', color: getScoreColor(record.agent_score) }}>
                 {record.agent_score}
               </span>
               <span style={{ fontSize: 14, color: '#999', marginLeft: 4 }}>分</span>
@@ -363,20 +332,13 @@ const ScreeningPage = () => {
     {
       title: '筛选结果',
       key: 'screening_status',
-      width: 120,
+      width: 140,
       render: (_: any, record: AgentEvaluatedResume) => {
         const score = record.agent_score;
-        const status = record.screening_status;
-
-        if (score === null || score === undefined) {
-          return <Tag style={{ fontSize: 12 }}>待评估</Tag>;
-        }
-
-        return (
-          <Tag color={getStatusColor(status || null, score)} style={{ fontSize: 13, fontWeight: 500 }}>
-            {getStatusText(status || null, score)}
-          </Tag>
-        );
+        if (score === null || score === undefined) return <Tag style={{ fontSize: 12 }}>待评估</Tag>;
+        if (score >= 70) return <Tag color="success" style={{ fontSize: 13, fontWeight: 500 }}>可以进入面试</Tag>;
+        if (score >= 40) return <Tag color="warning" style={{ fontSize: 13, fontWeight: 500 }}>待定</Tag>;
+        return <Tag color="error" style={{ fontSize: 13, fontWeight: 500 }}>不合格</Tag>;
       },
     },
     {
@@ -403,58 +365,52 @@ const ScreeningPage = () => {
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 120,
       fixed: 'right' as const,
       render: (_: any, record: AgentEvaluatedResume) => (
-        <Button
-          type="link"
-          size="small"
-          onClick={() => {
-            // 🔴 修复：必须使用resume_id，而不是id（id是screening_result的ID）
+        <Space size="small">
+          <Button type="link" size="small" onClick={() => window.open(`http://localhost:8000/api/v1/pdfs/${record.resume_id}`, '_blank')}>
+            查看PDF
+          </Button>
+          <Button type="link" size="small" onClick={() => {
             const resumeId = record.resume_id;
-            if (resumeId) {
-              handleViewPdf(resumeId);
-            }
-          }}
-        >
-          查看PDF
-        </Button>
+            const name = record.candidate_name || '未命名';
+            if (resumeId) handleMarkInterviewed(resumeId, name);
+          }}>
+            {record.screening_status === '已面试' ? '取消面试' : '已面试'}
+          </Button>
+        </Space>
       ),
     },
   ];
 
-  const handleViewPdf = (resumeId: string) => {
-    // 在新窗口打开PDF
-    window.open(`http://localhost:8000/api/v1/pdfs/${resumeId}`, '_blank');
-  };
-
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div style={{ flex: 1 }}>
           <h2 style={{ margin: 0 }}>筛选结果</h2>
           <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
             只显示已配置FastGPT Agent的岗位类别（目前：实施顾问）
           </div>
-          {/* 时间筛选器 */}
           <div style={{ marginTop: 12 }}>
-            <Space size="middle">
-              <span style={{ color: '#666' }}>筛选:</span>
-              <Radio.Group value={timeRange} onChange={handleTimeRangeChange} buttonStyle="solid">
-                <Radio.Button value="all">全部 <span style={{ color: '#1890ff' }}>({timeStats.all})</span></Radio.Button>
-                <Radio.Button value="today">今天 <span style={{ color: '#ff4d4f' }}>({timeStats.today})</span></Radio.Button>
-                <Radio.Button value="this_week">本周 <span style={{ color: '#faad14' }}>({timeStats.thisWeek})</span></Radio.Button>
-                <Radio.Button value="this_month">本月 <span style={{ color: '#1890ff' }}>({timeStats.thisMonth})</span></Radio.Button>
-              </Radio.Group>
-            </Space>
+            <Radio.Group value={timeRange} onChange={handleTimeRangeChange} buttonStyle="solid">
+              <Radio.Button value="all">全部 ({timeStats.all})</Radio.Button>
+              <Radio.Button value="today">今天 ({timeStats.today})</Radio.Button>
+              <Radio.Button value="this_week">本周 ({timeStats.thisWeek})</Radio.Button>
+              <Radio.Button value="this_month">本月 ({timeStats.thisMonth})</Radio.Button>
+            </Radio.Group>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Radio.Group value={screeningStatus} onChange={(e) => setScreeningStatus(e.target.value)} buttonStyle="solid">
+              <Radio.Button value="all">全部</Radio.Button>
+              <Radio.Button value="interviewed">已面试</Radio.Button>
+              <Radio.Button value="pass">可以进行面试</Radio.Button>
+              <Radio.Button value="pending">待定</Radio.Button>
+              <Radio.Button value="fail">不合格</Radio.Button>
+            </Radio.Group>
           </div>
         </div>
-        <Button
-          type="default"
-          icon={<ReloadOutlined />}
-          onClick={() => loadResumes(pagination.current, pagination.pageSize)}
-          loading={loading}
-        >
+        <Button type="default" icon={<ReloadOutlined />} onClick={() => loadResumes(pagination.current, pagination.pageSize)} loading={loading}>
           刷新
         </Button>
       </div>
@@ -466,17 +422,17 @@ const ScreeningPage = () => {
           rowKey="id"
           loading={loading}
           pagination={{
-            current: pagination.current,
+            current: screeningStatus !== 'all' ? 1 : pagination.current,
             pageSize: pagination.pageSize,
-            total: pagination.total,
-            showSizeChanger: true,
+            total: filteredTotal,
+            showSizeChanger: screeningStatus === 'all',
             pageSizeOptions: ['20', '50', '100', '200'],
-            showTotal: (total, range) =>
-              `显示 ${range[0]}-${range[1]} 条，共 ${total} 条简历`,
+            showTotal: (total, range) => `显示 ${range[0]}-${range[1]} 条，共 ${total} 条简历`,
           }}
           onChange={handleTableChange}
           scroll={{ x: 1200 }}
           rowClassName={(record) => {
+            if (record.screening_status === '已面试') return 'row-interviewed';
             const score = record.agent_score;
             if (score === null || score === undefined) return '';
             if (score >= 70) return 'row-pass';
@@ -487,15 +443,11 @@ const ScreeningPage = () => {
       </Card>
 
       <style>{`
-        .row-pass:hover {
-          background-color: #f6ffed !important;
-        }
-        .row-review:hover {
-          background-color: #fffbe6 !important;
-        }
-        .row-reject:hover {
-          background-color: #fff1f0 !important;
-        }
+        .row-pass:hover { background-color: #f6ffed !important; }
+        .row-review:hover { background-color: #fffbe6 !important; }
+        .row-reject:hover { background-color: #fff1f0 !important; }
+        .row-interviewed { background-color: #f5f5f5 !important; color: #999 !important; }
+        .row-interviewed td { background-color: #f5f5f5 !important; color: #999 !important; }
       `}</style>
     </div>
   );

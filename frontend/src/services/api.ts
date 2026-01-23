@@ -4,7 +4,7 @@ import type { Job, JobCreate, JobUpdate, MatchRequest, MatchResult } from '../ty
 
 // 创建axios实例
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1',
+  baseURL: (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1') + '/',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -14,11 +14,11 @@ const api = axios.create({
 // 请求拦截器
 api.interceptors.request.use(
   (config) => {
-    // 可以在这里添加token
-    // const token = localStorage.getItem('token');
-    // if (token) {
-    //   config.headers.Authorization = `Bearer ${token}`;
-    // }
+    // 添加token
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
     return config;
   },
   (error) => {
@@ -32,6 +32,12 @@ api.interceptors.response.use(
     return response.data;
   },
   (error: AxiosError) => {
+    // 处理401未授权错误
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('userInfo');
+      window.location.href = '/login';
+    }
     // 统一错误处理
     const data = error.response?.data as any;
     const message = data?.detail || error.message || '请求失败';
@@ -39,6 +45,60 @@ api.interceptors.response.use(
     return Promise.reject(new Error(message));
   }
 );
+
+// ==================== 认证相关API ====================
+
+interface UserInfo {
+  id: string;
+  username: string;
+  role: string;
+  job_categories: string[];
+  is_active: boolean;
+}
+
+interface UserCreate {
+  username: string;
+  password: string;
+  role?: string;
+  job_categories?: string[];
+}
+
+interface UserUpdate {
+  password?: string;
+  role?: string;
+  job_categories?: string[];
+  is_active?: boolean;
+}
+
+/** 获取当前用户信息 */
+export const getCurrentUser = async (): Promise<UserInfo> => {
+  return api.get('/auth/me');
+};
+
+/** 获取用户列表（仅管理员） */
+export const getUsers = async (): Promise<any[]> => {
+  return api.get('/auth/users');
+};
+
+/** 创建用户（仅管理员） */
+export const createUser = async (data: UserCreate): Promise<any> => {
+  return api.post('/auth/users', data);
+};
+
+/** 更新用户（仅管理员） */
+export const updateUser = async (id: string, data: UserUpdate): Promise<any> => {
+  return api.put(`/auth/users/${id}`, data);
+};
+
+/** 删除用户（仅管理员） */
+export const deleteUser = async (id: string): Promise<{ message: string }> => {
+  return api.delete(`/auth/users/${id}`);
+};
+
+/** 获取可用的岗位类别列表（仅管理员） */
+export const getAvailableJobCategories = async (): Promise<string[]> => {
+  return api.get('/auth/job-categories');
+};
 
 // ==================== 岗位相关API ====================
 
@@ -81,6 +141,8 @@ export const getScreeningResults = async (params?: {
   skip?: number;
   limit?: number;
   time_range?: string;  // 时间范围: today/this_week/this_month
+  screening_status?: string;  // 筛选状态: pending/不合格/待定/可以发offer/已面试
+  search?: string;  // 搜索候选人姓名
 }): Promise<any> => {
   return api.get('/screening/results', { params });
 };
@@ -95,6 +157,7 @@ export const getScreeningResult = async (id: string): Promise<any> => {
 /** 获取简历列表 */
 export const getResumes = async (params?: {
   status?: string;
+  screening_status?: string;  // 筛选状态: pending/不合格/待定/可以发offer/已面试
   skip?: number;
   limit?: number;
   file_type?: string;
@@ -104,6 +167,7 @@ export const getResumes = async (params?: {
   exclude_needs_review?: boolean;  // 排除需要人工审核的简历(raw_text少于100字符)
   needs_review_only?: boolean;  // 只返回需要人工审核的简历
   time_range?: string;  // 时间范围: today/this_week/this_month
+  search?: string;  // 搜索候选人姓名
 }): Promise<{ total: number; items: any[]; page?: number; page_size?: number }> => {
   return api.get('/resumes/', { params });
 };
@@ -154,24 +218,83 @@ export const markResumeForReview = async (id: string): Promise<{
   return api.post(`/resumes/${id}/mark-for-review`);
 };
 
+/** 标记简历为已面试 */
+export const markInterviewed = async (id: string): Promise<{
+  resume_id: string;
+  message: string;
+}> => {
+  return api.post(`/resumes/${id}/mark-interviewed`);
+};
+
+// ==================== 批量上传API ====================
+
+/** 多来源混合上传简历（本地文件 + URL + ZIP） */
+export const multiSourceUploadResumes = async (params: {
+  files?: File[];
+  urls?: string[];
+  zipFile?: File;
+}): Promise<{
+  message: string;
+  results: {
+    local_files: {
+      total: number;
+      success: number;
+      failed: number;
+      errors: Array<{ file: string; error: string }>;
+      file_paths: string[];
+    };
+    urls: {
+      total: number;
+      success: number;
+      failed: number;
+      errors: Array<{ url: string; error: string }>;
+      file_paths: string[];
+    };
+    zip: {
+      total: number;
+      success: number;
+      skipped: number;
+      failed: number;
+      errors: Array<{ file: string; error: string }>;
+      file_paths: string[];
+    };
+    overall: {
+      total: number;
+      success: number;
+      failed: number;
+      exceeded?: boolean;
+    };
+  };
+}> => {
+  const formData = new FormData();
+
+  // 添加本地文件
+  if (params.files && params.files.length > 0) {
+    params.files.forEach(file => {
+      formData.append('files', file);
+    });
+  }
+
+  // 添加URL列表
+  if (params.urls && params.urls.length > 0) {
+    formData.append('urls', JSON.stringify(params.urls));
+  }
+
+  // 添加ZIP文件
+  if (params.zipFile) {
+    formData.append('zip_file', params.zipFile);
+  }
+
+  return api.post('/upload/multi-source-upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+    timeout: 300000, // 5分钟超时（支持URL下载和ZIP解压）
+  });
+};
+
 // ==================== 邮箱相关API ====================
-
-/** 导入历史邮件（包括已读） */
-export const importHistoricalEmails = async (limit: number = 1000): Promise<{
-  message: string;
-  task_id: string;
-  limit: number;
-}> => {
-  return api.post('/email/import-historical', null, { params: { limit } });
-};
-
-/** 手动触发邮箱检查（未读邮件） */
-export const triggerEmailCheck = async (): Promise<{
-  message: string;
-  task_id: string;
-}> => {
-  return api.post('/email/trigger-check');
-};
+// 邮箱相关功能（检查邮箱、导入历史邮件）已移除
 
 /** 获取简历的筛选结果（前2个最佳匹配） */
 export const getResumeScreenings = async (id: string): Promise<any> => {

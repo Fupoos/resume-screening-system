@@ -39,9 +39,11 @@ AGENT_ENDPOINTS: Dict[str, Dict] = {
         "retry": int(os.getenv("AGENT_RETRY_COUNT", "2")),  # 减少重试次数
     },
     "市场运营_default": {
-        "url": os.getenv("AGENT_MARKETING_URL", "https://api.example.com/marketing"),
-        "timeout": int(os.getenv("AGENT_TIMEOUT", "30")),
-        "retry": int(os.getenv("AGENT_RETRY_COUNT", "3")),
+        "type": "fastgpt",  # 使用FastGPT进行评估
+        "url": os.getenv("FASTGPT_BASE_URL", "https://ai.cloudpense.com/api"),
+        "api_key_env": "FASTGPT_API_KEY_RD",  # 使用研发API Key
+        "timeout": int(os.getenv("AGENT_TIMEOUT", "180")),  # 增加到3分钟
+        "retry": int(os.getenv("AGENT_RETRY_COUNT", "2")),  # 减少重试次数
     },
     "前端开发_default": {
         "type": "fastgpt",  # 使用FastGPT进行评估

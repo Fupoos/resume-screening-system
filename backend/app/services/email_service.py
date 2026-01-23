@@ -73,15 +73,12 @@ class EmailService:
 
     def fetch_unread_emails(
         self,
-        filter_keywords: Optional[List[str]] = None,
-        sender_whitelist: Optional[List[str]] = None,
         save_path: Optional[str] = None
     ) -> List[Dict]:
-        """获取未读邮件
+        """获取未读邮件（只要有简历附件就处理）
 
         Args:
-            filter_keywords: 过滤关键词列表（邮件主题包含这些关键词）
-            sender_whitelist: 发件人白名单
+            save_path: 附件保存路径
 
         Returns:
             邮件列表
@@ -134,13 +131,7 @@ class EmailService:
                             ext = att['filename'].split('.')[-1].lower()
                             attachment_types[ext] = attachment_types.get(ext, 0) + 1
 
-                    # 过滤邮件
-                    if self._should_filter_email(email_info, filter_keywords, sender_whitelist):
-                        # 记录被过滤的邮件（前5封）
-                        if len(emails) < 5 and email_info['attachments']:
-                            logger.info(f"邮件被过滤: 主题='{email_info['subject'][:50]}', 附件={[a['filename'] for a in email_info['attachments']]}")
-                        continue
-
+                    # 添加到结果列表（不再过滤）
                     emails.append(email_info)
 
                 except Exception as e:
@@ -158,16 +149,13 @@ class EmailService:
     def fetch_read_emails(
         self,
         limit: int = 500,
-        filter_keywords: Optional[List[str]] = None,
-        sender_whitelist: Optional[List[str]] = None,
         save_path: Optional[str] = None
     ) -> List[Dict]:
         """获取已读邮件（最新的N封）
 
         Args:
             limit: 获取邮件数量限制
-            filter_keywords: 过滤关键词列表（邮件主题包含这些关键词）
-            sender_whitelist: 发件人白名单
+            save_path: 附件保存路径
 
         Returns:
             邮件列表
@@ -223,13 +211,7 @@ class EmailService:
                             ext = att['filename'].split('.')[-1].lower()
                             attachment_types[ext] = attachment_types.get(ext, 0) + 1
 
-                    # 过滤邮件
-                    if self._should_filter_email(email_info, filter_keywords, sender_whitelist):
-                        # 记录被过滤的邮件（前5封）
-                        if len(emails) < 5 and email_info['attachments']:
-                            logger.info(f"邮件被过滤: 主题='{email_info['subject'][:50]}', 附件={[a['filename'] for a in email_info['attachments']]}")
-                        continue
-
+                    # 添加到结果列表（不再过滤）
                     emails.append(email_info)
 
                 except Exception as e:
@@ -244,19 +226,104 @@ class EmailService:
 
         return emails
 
+    def fetch_emails_by_date(
+        self,
+        date_str: str,
+        save_path: Optional[str] = None
+    ) -> List[Dict]:
+        """获取指定日期的所有邮件
+
+        Args:
+            date_str: 日期字符串，格式如 '21-Jan-2025' 或 '2025-01-21'
+            save_path: 附件保存路径
+
+        Returns:
+            邮件列表
+        """
+        from datetime import datetime
+
+        if not self.client:
+            if not self.connect():
+                return []
+
+        # 转换日期格式为 IMAP 要求的格式 (DD-Jan-YYYY)
+        try:
+            # 尝试解析 2025-01-21 格式
+            if '-' in date_str and len(date_str.split('-')) == 3:
+                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                date_imap = dt.strftime('%d-%b-%Y')
+            else:
+                # 已经是 IMAP 格式
+                date_imap = date_str
+            logger.info(f"搜索日期: {date_imap}")
+        except Exception as e:
+            logger.error(f"日期格式解析失败: {e}")
+            return []
+
+        emails = []
+        attachment_count = 0
+        attachment_types = {}
+
+        try:
+            # 搜索指定日期的邮件（使用 SINCE 和 BEFORE 组合）
+            # SINCE 包含当天，所以用 SINCE 21-Jan AND BEFORE 22-Jan 来获取21号的
+            next_day = datetime.strptime(date_imap, '%d-%b-%Y')
+            from datetime import timedelta
+            next_day = next_day + timedelta(days=1)
+            next_day_imap = next_day.strftime('%d-%b-%Y')
+
+            status, messages = self.client.search(None, 'SINCE', date_imap, 'BEFORE', next_day_imap)
+
+            if status != 'OK':
+                logger.warning("搜索邮件失败")
+                return []
+
+            email_ids = messages[0].split()
+            logger.info(f"找到 {len(email_ids)} 封邮件在 {date_imap}")
+
+            for idx, email_id in enumerate(email_ids):
+                try:
+                    if idx % 50 == 0:
+                        logger.info(f"正在处理第 {idx+1}/{len(email_ids)} 封邮件...")
+
+                    status, msg_data = self.client.fetch(email_id, '(RFC822)')
+                    if status != 'OK':
+                        continue
+
+                    raw_email = msg_data[0][1]
+                    msg = message_from_bytes(raw_email)
+
+                    email_info = self._parse_email(msg, email_id.decode(), save_path)
+
+                    if email_info['attachments']:
+                        attachment_count += len(email_info['attachments'])
+                        for att in email_info['attachments']:
+                            ext = att['filename'].split('.')[-1].lower()
+                            attachment_types[ext] = attachment_types.get(ext, 0) + 1
+
+                    emails.append(email_info)
+
+                except Exception as e:
+                    logger.error(f"解析邮件 {email_id} 失败: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"获取邮件失败: {e}")
+
+        logger.info(f"附件统计: 总计{attachment_count}个附件, 类型分布: {dict(attachment_types)}")
+
+        return emails
+
     def fetch_recent_emails(
         self,
         limit: int = 20,
-        filter_keywords: Optional[List[str]] = None,
-        sender_whitelist: Optional[List[str]] = None,
         save_path: Optional[str] = None
     ) -> List[Dict]:
         """获���最近的N封邮件（包括已读和未读，按时间从近到远）
 
         Args:
             limit: 获取邮件数量限制（默认20封）
-            filter_keywords: 过滤关键词列表（邮件主题包含这些关键词）
-            sender_whitelist: 发件人白名单
+            save_path: 附件保存路径
 
         Returns:
             邮件列表（按时间从近到远排序）
@@ -321,21 +388,8 @@ class EmailService:
                             ext = att['filename'].split('.')[-1].lower()
                             attachment_types[ext] = attachment_types.get(ext, 0) + 1
 
-                    # 过滤邮件
-                    should_filter = self._should_filter_email(email_info, filter_keywords, sender_whitelist)
-                    if should_filter:
-                        # 记录被过滤的邮件（前10封）
-                        if idx < 10:
-                            logger.info(
-                                f"邮件被过滤: 主题='{email_info['subject'][:50]}', "
-                                f"附件={[a['filename'] for a in email_info['attachments']]}, "
-                                f"原因={self._get_filter_reason(email_info, filter_keywords, sender_whitelist)}"
-                            )
-                        continue
-
-                    # 添加到结果列表
+                    # 添加到结果列表（不再过滤）
                     emails.append(email_info)
-                    logger.info(f"✓ 邮件 {idx+1} 通过检查，已添加到处理队列")
 
                 except Exception as e:
                     logger.error(f"解析邮件 {email_id} 失败: {e}")
@@ -398,8 +452,8 @@ class EmailService:
         # 解码文件名后再判断
         decoded_name = self._decode_filename(filename)
 
-        # 检查文件扩展名（只接受PDF格式）
-        resume_extensions = ('.pdf', '.PDF')
+        # 检查文件扩展名（接受PDF和DOCX格式）
+        resume_extensions = ('.pdf', '.PDF', '.docx', '.DOCX', '.doc', '.DOC')
         return decoded_name.endswith(resume_extensions)
 
     def _parse_email(self, msg: message.Message, email_id: str, save_path: str = None) -> Dict:
@@ -478,7 +532,9 @@ class EmailService:
                             import os
                             from pathlib import Path
                             Path(save_path).mkdir(parents=True, exist_ok=True)
-                            saved_path = os.path.join(save_path, decoded_filename)
+                            # 清理文件名中的特殊字符（避免路径错误）
+                            safe_filename = decoded_filename.replace('/', '-').replace('\\', '-').replace(':', '_')
+                            saved_path = os.path.join(save_path, safe_filename)
                             with open(saved_path, 'wb') as f:
                                 f.write(attachment_data)
                             logger.info(f"附件已保存: {saved_path}")
@@ -618,8 +674,9 @@ class EmailService:
 
                     # 找到目标附件（比较解码后的文件名）
                     if decoded_filename == file_name:
-                        # 保存文件（使用解码后的文件名）
-                        file_path = os.path.join(save_path, file_name)
+                        # 保存文件（清理文件名中的特殊字符）
+                        safe_filename = file_name.replace('/', '-').replace('\\', '-').replace(':', '_')
+                        file_path = os.path.join(save_path, safe_filename)
                         Path(save_path).mkdir(parents=True, exist_ok=True)
 
                         with open(file_path, 'wb') as f:
@@ -634,50 +691,3 @@ class EmailService:
             logger.error(f"下载附件失败: {e}")
             return None
 
-    def move_to_folder(self, email_id: str, folder_name: str) -> bool:
-        """移动邮件到指定���件夹
-
-        Args:
-            email_id: 邮件ID
-            folder_name: 目标文件夹名称
-
-        Returns:
-            是否成功
-        """
-        try:
-            # 对文件夹名进行IMAP UTF-7编码（支持中文）
-            from imapclient.imap_utf7 import encode
-            encoded_folder = encode(folder_name)
-
-            # 尝试移动邮件（使用COPY标记）
-            self.client.copy(email_id, encoded_folder)
-            self.client.store(email_id, '+FLAGS', '\\Seen')
-            self.client.store(email_id, '+FLAGS', '\\Deleted')
-            self.client.expunge()
-
-            logger.info(f"邮件 {email_id} 已移动到 {folder_name}")
-            return True
-
-        except Exception as e:
-            # 如果文件夹不存在，尝试创建后重试
-            error_msg = str(e)
-            if 'TRYCREATE' in error_msg or 'not found' in error_msg.lower() or 'cannot' in error_msg.lower():
-                logger.warning(f"文件夹 {folder_name} 不存在，尝试创建...")
-                try:
-                    self.client.create(encoded_folder)
-                    logger.info(f"成功创建文件夹 {folder_name}")
-
-                    # 重试移动邮件
-                    self.client.copy(email_id, encoded_folder)
-                    self.client.store(email_id, '+FLAGS', '\\Seen')
-                    self.client.store(email_id, '+FLAGS', '\\Deleted')
-                    self.client.expunge()
-
-                    logger.info(f"邮件 {email_id} 已移动到 {folder_name}")
-                    return True
-                except Exception as e2:
-                    logger.error(f"创建文件夹或移动邮件失败: {e2}")
-                    return False
-            else:
-                logger.error(f"移动邮件失败: {e}")
-                return False

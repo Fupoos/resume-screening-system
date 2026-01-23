@@ -1,10 +1,23 @@
 """城市提取服务 - 从邮件主题、正文、简历中提取城市信息"""
 import re
 import logging
-from typing import Optional
+from typing import Optional, List
+from dataclasses import dataclass, field
 from app.data.cities import ALL_CITIES, CITY_ALIASES, get_standard_city_name
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CityExtractionResult:
+    """城市提取结果
+
+    Attributes:
+        confirmed_city: 确认城市（100%置信度，来自明确格式）
+        candidate_cities: 候选城市列表（从统计、工作经历推断）
+    """
+    confirmed_city: Optional[str] = None
+    candidate_cities: List[str] = field(default_factory=list)
 
 
 class CityExtractor:
@@ -27,125 +40,179 @@ class CityExtractor:
 
         logger.info(f"城市提取器初始化完成，支持 {len(ALL_CITIES)} 个城市，{len(CITY_ALIASES)}个别名")
 
-    def extract_city(self, email_subject: str = '', email_body: str = '', resume_text: str = '') -> Optional[str]:
-        """按优先级提取城市：主题 > 正文 > 简历
+    def extract_city(self, email_subject: str = '', email_body: str = '',
+                     resume_text: str = '') -> CityExtractionResult:
+        """按优先级提取城市，返回确认城市和候选城市
+
+        只从邮件主题提取，不从正文和简历提取
 
         Args:
             email_subject: 邮件主题
-            email_body: 邮件正文
-            resume_text: 简历文本
+            email_body: 邮件正文（不再使用）
+            resume_text: 简历文本（不再使用）
 
         Returns:
-            提取的城市名称（标准名称），如果未找到则返回 None
+            CityExtractionResult: 包含确认城市和候选城市列表
         """
-        # 优先级1: 从邮件主题提取（优先匹配"应聘|申请|期望"后面的城市）
-        city = self._extract_from_subject(email_subject)
-        if city:
-            logger.info(f"从邮件主题提取到城市: {city}")
-            return city
+        result = CityExtractionResult()
 
-        # 优先级2: 从邮件正文提取
-        city = self._extract_from_body(email_body)
-        if city:
-            logger.info(f"从邮件正文提取到城市: {city}")
-            return city
+        # 只从邮件主题提取城市
+        subject_result = self._extract_from_subject(email_subject)
+        if subject_result.confirmed_city:
+            result.confirmed_city = subject_result.confirmed_city
+            logger.info(f"从邮件主题提取到确认城市: {result.confirmed_city}")
 
-        # 优先级3: 从简历文本提取
-        city = self._extract_from_resume(resume_text)
-        if city:
-            logger.info(f"从简历文本提���到城市: {city}")
-            return city
+        # 不再提取候选城市
+        result.candidate_cities = []
 
-        logger.debug("未能从任何来源提取到城市信息")
-        return None
+        return result
 
-    def _extract_from_subject(self, subject: str) -> Optional[str]:
-        """从邮件主题提取城市
+    # ========== 保留旧接口以保持兼容性 ==========
+    def extract_city_simple(self, email_subject: str = '', email_body: str = '',
+                           resume_text: str = '') -> Optional[str]:
+        """简化版提取方法（保持向后兼容）
 
-        支持格式:
-        - "应聘北京Python工程师" -> "北京"
-        - "上海-HR岗" -> "上海"
-        - "期望工作地点：深圳后端开发" -> "深圳"
-        - "南京 | Java开发工程师" -> "南京"
-
-        Args:
-            subject: 邮件主题
-
-        Returns:
-            提取的城市名称，如果未找到则返回 None
+        只返回确认城市，不返回候选城市
         """
+        result = self.extract_city(email_subject, email_body, resume_text)
+        return result.confirmed_city
+
+    # ========== 以下是私有方法 ==========
+
+    def _extract_from_subject(self, subject: str) -> CityExtractionResult:
+        """从邮件主题提取城市（区分确认和候选）
+
+        确认城市来源：
+        - BOSS直聘格式
+        - 括号格式
+        - 应聘/期望关键词格式
+        - 城市-岗位 格式
+
+        候选城市来源：
+        - 主题中所有出现的城市（非确认城市）
+        """
+        result = CityExtractionResult()
+
         if not subject:
-            return None
+            return result
 
         subject = subject.strip()
 
-        # 策略1: 优先匹配"应聘|申请|期望|求职意向|投递"后面的城市
-        for keyword in self.application_keywords:
-            # 匹配 "关键词 城市" 或 "关键词城市" 或 "关键词-城市"
-            patterns = [
-                rf'{keyword}[:：\s\-]*({self.city_pattern})',  # 应聘:北京 或 应聘北京
-                rf'({self.city_pattern})[:：\s\-]*{keyword}',  # 北京:应聘
-            ]
+        # ========== 确认城市提取 ==========
 
+        # 格式1: BOSS直聘 【职位_城市_薪资】
+        boss_pattern1 = r'【[^_]+_({0})_[^】]+】'.format(self.city_pattern)
+        match = re.search(boss_pattern1, subject)
+        if match:
+            city_name = match.group(1)
+            standard_name = get_standard_city_name(city_name)
+            if standard_name:
+                result.confirmed_city = standard_name
+                logger.info(f"从BOSS格式提取到城市: {standard_name}")
+                # 同时收集候选城市
+                result.candidate_cities = []  # 只保留确认城市，不收集候选城市
+                return result
+
+        # 格式2: BOSS直聘 【职位（城市）_城市_薪资】
+        boss_pattern2 = r'【[^（（]+\((({0}))\)[^】]+】'.format(self.city_pattern)
+        match = re.search(boss_pattern2, subject)
+        if match:
+            city_name = match.group(1)
+            standard_name = get_standard_city_name(city_name)
+            if standard_name:
+                result.confirmed_city = standard_name
+                logger.info(f"从BOSS格式（括号内）提取到城市: {standard_name}")
+                result.candidate_cities = []  # 只保留确认城市，不收集候选城市
+                return result
+
+        # 格式3: 括号城市标记 【城市】或[城市]
+        bracket_city_pattern = r'[【\[]({0})[】\]]'.format(self.city_pattern)
+        match = re.search(bracket_city_pattern, subject)
+        if match:
+            city_name = match.group(1)
+            standard_name = get_standard_city_name(city_name)
+            if standard_name:
+                result.confirmed_city = standard_name
+                logger.info(f"从括号格式提取到城市: {standard_name}")
+                result.candidate_cities = []  # 只保留确认城市，不收集候选城市
+                return result
+
+        # 格式4: 应聘/期望关键词格式
+        for keyword in self.application_keywords:
+            patterns = [
+                rf'{keyword}[:：\s\-]*({self.city_pattern})',
+                rf'({self.city_pattern})[:：\s\-]*{keyword}',
+            ]
             for pattern in patterns:
                 match = re.search(pattern, subject)
                 if match:
+                    # get_standard_city_name 现在可以处理 tuple（来自嵌套捕获组）
                     city_name = match.group(1)
                     standard_name = get_standard_city_name(city_name)
                     if standard_name:
-                        return standard_name
+                        result.confirmed_city = standard_name
+                        result.candidate_cities = []  # 只保留确认城市，不收集候选城市
+                        return result
 
-        # 策略2: 匹配"城市-岗位"或"城市|岗位"格式
-        # 例如: "北京-HR岗", "上海 | Java开发"
+        # 格式5: 城市开头 城市-岗位
         pattern = rf'^({self.city_pattern})[\s\-|]+'
         match = re.search(pattern, subject)
         if match:
             city_name = match.group(1)
             standard_name = get_standard_city_name(city_name)
             if standard_name:
-                return standard_name
+                result.confirmed_city = standard_name
+                result.candidate_cities = []  # 只保留确认城市，不收集候选城市
+                return result
 
-        # 策略3: 匹配"岗位-城市"格式
-        # 例如: "Python工程师-北京", "HR专员 / 上海"
+        # 格式6: 城市结尾 岗位-城市
         pattern = rf'[\s\-|/]+({self.city_pattern})$'
         match = re.search(pattern, subject)
         if match:
             city_name = match.group(1)
             standard_name = get_standard_city_name(city_name)
             if standard_name:
-                return standard_name
+                result.confirmed_city = standard_name
+                result.candidate_cities = []  # 只保留确认城市，不收集候选城市
+                return result
 
-        # 策略4: 全局搜索（如果主题中只有一个城市）
-        cities = re.findall(self.city_pattern, subject)
-        if len(cities) == 1:
-            city_name = cities[0]
+        # 格式7: BOSS直聘格式 城市薪资【BOSS直聘】 或 城市数字-数字【...
+        # 例如: "上海8-13K【BOSS直聘】" 或 "北京15-25K【..."
+        boss_pattern3 = rf'({self.city_pattern})\d+[\d\-Kk]+【[^】]+】'
+        match = re.search(boss_pattern3, subject)
+        if match:
+            city_name = match.group(1)
             standard_name = get_standard_city_name(city_name)
             if standard_name:
-                return standard_name
+                result.confirmed_city = standard_name
+                logger.info(f"从BOSS格式(城市薪资)提取到城市: {standard_name}")
+                result.candidate_cities = []  # 只保留确认城市，不收集候选城市
+                return result
 
-        return None
+        # ========== 未找到确认城市，不收集候选城市 ==========
+        result.candidate_cities = []
+        return result
 
-    def _extract_from_body(self, body: str) -> Optional[str]:
-        """从邮件正文提取城市
+    def _extract_from_body(self, body: str) -> CityExtractionResult:
+        """从邮件正文提取城市（区分确认和候选）
 
-        支持格式:
-        - "期望工作地点：深圳" -> "深圳"
-        - "可工作城市: 北京、上海" -> "北京"（第一个）
-        - "应聘广州岗位" -> "广州"
+        确认城市来源：
+        - 期望工作地点关键词
+        - 应聘/期望关键词后的城市
 
-        Args:
-            body: 邮件正文
-
-        Returns:
-            提取的城市名称，如果未找到则返回 None
+        候选城市来源：
+        - 全文统计出现最多的城市
         """
-        if not body:
-            return None
+        result = CityExtractionResult()
 
-        # 只检查前5000个字符（通常邮件正文的前半部分包含关键信息）
+        if not body:
+            return result
+
         body = body[:5000]
 
-        # 策略1: 优先匹配"期望工作地点|可工作城市|工作地点"等关键词
+        # ========== 确认城市提取 ==========
+
+        # 期望工作地点等关键词
         location_keywords = [
             r'期望工作地点[:：\s]*({self.city_pattern})',
             r'可工作城市[:：\s]*({self.city_pattern})',
@@ -160,57 +227,46 @@ class CityExtractor:
                 city_name = match.group(1)
                 standard_name = get_standard_city_name(city_name)
                 if standard_name:
-                    return standard_name
+                    result.confirmed_city = standard_name
+                    return result
 
-        # 策略2: 匹配"应聘/申请/期望"关键词附近的城市
+        # 应聘/期望关键词后的城市
         for keyword in self.application_keywords:
-            # 匹配关键词后50个字符内的城市
-            pattern = rf'{keyword}[^。]{0,50}?({self.city_pattern})'
-            matches = re.findall(pattern, body)
-            if matches:
-                city_name = matches[0]  # 取第一个匹配
+            pattern = rf'{keyword}[^。]*?({self.city_pattern})'
+            match = re.search(pattern, body)
+            if match:
+                # get_standard_city_name 现在可以处理 tuple（来自嵌套捕获组）
+                city_name = match.group(1)
                 standard_name = get_standard_city_name(city_name)
                 if standard_name:
-                    return standard_name
+                    result.confirmed_city = standard_name
+                    return result
 
-        # 策略3: 统计所有出现的城市，选择出现次数最多的
-        cities = re.findall(self.city_pattern, body)
-        if cities:
-            # 标准化所有城市名
-            standard_cities = [get_standard_city_name(city) for city in cities]
-            # 过滤掉None
-            standard_cities = [city for city in standard_cities if city]
-            # 统计出现次数
-            from collections import Counter
-            city_counter = Counter(standard_cities)
-            # 返回出现次数最多的城市
-            if city_counter:
-                most_common = city_counter.most_common(1)[0][0]
-                return most_common
+        # ========== 候选城市提取 ==========
+        result.candidate_cities = self._extract_all_cities_from_text(body)
+        return result
 
-        return None
+    def _extract_from_resume(self, text: str) -> CityExtractionResult:
+        """从简历文本提取城市（区分确认和候选）
 
-    def _extract_from_resume(self, text: str) -> Optional[str]:
-        """从简历文本提取城市
+        确认城市来源：
+        - 期望工作地点关键词
+        - 现居住地关键词
 
-        支持格式:
-        - "期望工作地点：上海" -> "上海"
-        - "现居住地：北京市" -> "北京"
-        - "工作经历：北京XX科技有限公司" -> "北京"
-
-        Args:
-            text: 简历文本
-
-        Returns:
-            提取的城市名称，如果未找到则返回 None
+        候选城市来源：
+        - 工作经历中的城市（公司名前缀）
+        - 全文统计出现>=3次的城市
         """
-        if not text:
-            return None
+        result = CityExtractionResult()
 
-        # 只检查前8000个字符（通常个人信息在前半部分）
+        if not text:
+            return result
+
         text = text[:8000]
 
-        # 策略1: 优先匹配"期望工作地点|求职意向|期望城市"等关键词
+        # ========== 确认城市提取 ==========
+
+        # 期望工作地点等关键词
         location_patterns = [
             r'期望工作地点[:：\s]*({self.city_pattern})',
             r'期望城市[:：\s]*({self.city_pattern})',
@@ -225,9 +281,10 @@ class CityExtractor:
                 city_name = match.group(1)
                 standard_name = get_standard_city_name(city_name)
                 if standard_name:
-                    return standard_name
+                    result.confirmed_city = standard_name
+                    return result
 
-        # 策略2: 匹配"现居住地|居住地|所在地"等关键词
+        # 现居住地等关键词
         residence_patterns = [
             r'现居住地[:：\s]*({self.city_pattern})',
             r'居住地[:：\s]*({self.city_pattern})',
@@ -241,39 +298,93 @@ class CityExtractor:
                 city_name = match.group(1)
                 standard_name = get_standard_city_name(city_name)
                 if standard_name:
-                    return standard_name
+                    result.confirmed_city = standard_name
+                    return result
 
-        # 策略3: 从工作经历中提取（查找"城市XX公司"模式）
-        # 通常格式：北京XX科技有限公司、上海XX集团
+        # ========== 候选城市提取 ==========
+        result.candidate_cities = self._extract_all_cities_from_text(text, min_count=3)
+        return result
+
+    # ========== 辅助方法 ==========
+
+    def _extract_all_cities_from_text(self, text: str, exclude: str = None,
+                                       min_count: int = 1) -> List[str]:
+        """从文本中提取所有出现的城市
+
+        Args:
+            text: 要分析的文本
+            exclude: 要排除的城市名
+            min_count: 最小出现次数
+
+        Returns:
+            城市列表（已去重）
+        """
+        if not text:
+            return []
+
+        # 使用 finditer 获取完整匹配（避免捕获组问题）
+        cities = []
+        for match in re.finditer(self.city_pattern, text):
+            cities.append(match.group(0))  # 获取完整匹配
+
+        if not cities:
+            return []
+
+        # 标准化所有城市名
+        standard_cities = []
+        for city_name in cities:
+            standard_name = get_standard_city_name(city_name)
+            if standard_name:
+                if exclude and standard_name == exclude:
+                    continue
+                standard_cities.append(standard_name)
+
+        if not standard_cities:
+            return []
+
+        # 统计出现次数
+        from collections import Counter
+        city_counter = Counter(standard_cities)
+
+        # 返回满足最小出现次数的城市，去重
+        result = []
+        seen = set()
+        for city, count in city_counter.items():
+            if count >= min_count and city not in seen:
+                result.append(city)
+                seen.add(city)
+
+        return result
+
+    def _extract_candidates_from_body(self, body: str) -> List[str]:
+        """从邮件正文提取候选城市"""
+        return self._extract_all_cities_from_text(body[:5000] if body else '')
+
+    def _extract_candidates_from_resume(self, text: str) -> List[str]:
+        """从简历文本提取候选城市"""
+        candidates = []
+
+        if not text:
+            return candidates
+
+        text = text[:8000]
+
+        # 从工作经历中的公司名前缀提取
         work_patterns = [
-            rf'({self.city_pattern})[^。]{0,30}?公司',
-            rf'({self.city_pattern})[^。]{0,30}?科技',
-            rf'({self.city_pattern})[^。]{0,30}?有限',
+            rf'({self.city_pattern})[^。]*?公司',
+            rf'({self.city_pattern})[^。]*?科技',
+            rf'({self.city_pattern})[^。]*?有限',
         ]
 
         for pattern in work_patterns:
-            matches = re.findall(pattern, text)
-            if matches:
-                # 取第一个出现的工作地点
-                city_name = matches[0]
+            # 使用 finditer 避免 re.findall 返回 tuple 的���题
+            for match in re.finditer(pattern, text):
+                city_name = match.group(1)  # 获取城市捕获组
                 standard_name = get_standard_city_name(city_name)
-                if standard_name:
-                    return standard_name
+                if standard_name and standard_name not in candidates:
+                    candidates.append(standard_name)
 
-        # 策略4: 统计所有出现的城市，选择出现次数最多的
-        cities = re.findall(self.city_pattern, text)
-        if cities:
-            # 标准化所有城市名
-            standard_cities = [get_standard_city_name(city) for city in cities]
-            # 过滤掉None
-            standard_cities = [city for city in standard_cities if city]
-            # 统计出现次数
-            from collections import Counter
-            city_counter = Counter(standard_cities)
-            # 返回出现次数最多的城市（如果出现次数>=3）
-            if city_counter:
-                most_common = city_counter.most_common(1)[0]
-                if most_common[1] >= 3:  # 至少出现3次
-                    return most_common[0]
+        # 从全文统计提取
+        candidates.extend(self._extract_all_cities_from_text(text, min_count=3))
 
-        return None
+        return list(dict.fromkeys(candidates))  # 去重

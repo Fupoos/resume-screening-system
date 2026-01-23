@@ -92,17 +92,27 @@ for cities in MAJOR_CITIES.values():
 CITY_SET = set(ALL_CITIES)
 
 
-def get_standard_city_name(name: str) -> str:
+def get_standard_city_name(name) -> str:
     """获取城市标准名称
 
     Args:
-        name: 城市名称（可能是别称或简称）
+        name: 城市名称（可能是别称或简称，也可能是tuple）
 
     Returns:
         标准城市名称，如果不在列表中则返回原名称
     """
     if not name:
         return name
+
+    # 处理tuple类型（re.findall返回的tuple结果）
+    if isinstance(name, tuple):
+        # 取第一个非空元素
+        for item in name:
+            if item:  # 非空字符串
+                name = item
+                break
+        else:
+            return None  # 所有元素都为空
 
     # 如果是标准名称，直接返回
     if name in CITY_SET:

@@ -10,16 +10,20 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.core.database import get_db
+from app.core.auth import get_current_user
 from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
 from app.models.job import Job
+from app.models.user import User
 from app.services.resume_parser import ResumeParser
+from app.services.city_extractor import CityExtractor
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # 初始化服务
 resume_parser = ResumeParser()
+city_extractor = CityExtractor()
 
 # 文件保存目录
 UPLOAD_DIR = "/app/resume_files"
@@ -31,6 +35,7 @@ def list_resumes(
     skip: int = Query(0, ge=0, description="跳过记录数"),
     limit: int = Query(10, ge=1, le=1000, description="返回记录数"),
     status: Optional[str] = Query(None, description="筛选状态"),
+    screening_status: Optional[str] = Query(None, description="筛选状态: pending/不合格/待定/可以发offer/已面试"),
     file_type: Optional[str] = Query(None, description="筛选文件类型"),
     has_pdf_and_content: bool = Query(False, description="只返回既有PDF文件又有正文的简历"),
     agent_evaluated: Optional[bool] = Query(None, description="只返回已通过Agent评估的简历"),
@@ -38,21 +43,46 @@ def list_resumes(
     exclude_needs_review: bool = Query(True, description="排除需要人工审核的简历(raw_text少于100字符)"),
     needs_review_only: bool = Query(False, description="只返回需要人工审核的简历"),
     time_range: Optional[str] = Query(None, description="时间范围: today/this_week/this_month"),
+    search: Optional[str] = Query(None, description="搜索候选人姓名"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取简历列表"""
+    """获取简历列表（根据用户权限过滤）"""
     query = db.query(Resume)
+
+    # 权限过滤：管理员看全部，HR用户只看自己有权限的岗位类别
+    if current_user.role != "admin":
+        from app.models.user import UserJobCategory
+        accessible_categories = db.query(UserJobCategory.job_category_name).filter(
+            UserJobCategory.user_id == current_user.id
+        ).all()
+        accessible_category_names = [cat[0] for cat in accessible_categories]
+
+        if not accessible_category_names:
+            # 用户没有任何权限，返回空结果
+            return {
+                "total": 0,
+                "items": [],
+                "page": 1,
+                "page_size": limit
+            }
+
+        query = query.filter(Resume.job_category.in_(accessible_category_names))
 
     if status:
         query = query.filter(Resume.status == status)
 
+    # 筛选状态筛选
+    if screening_status:
+        query = query.filter(Resume.screening_status == screening_status)
+
     if file_type:
         query = query.filter(Resume.file_type == file_type)
 
-    # 只返回既有PDF又有正文的简历
+    # 只返回既有PDF/DOCX又有正文的简历
     if has_pdf_and_content:
         query = query.filter(
-            Resume.file_type == 'pdf',
+            Resume.file_type.in_(['pdf', 'docx']),
             Resume.raw_text.isnot(None),
             Resume.raw_text != ''
         )
@@ -85,22 +115,33 @@ def list_resumes(
             db_func.length(Resume.raw_text) > 100
         )
 
-    # 时间范围筛选
+    # 时间范围筛选（使用北京时间 UTC+8）
     if time_range:
-        now = datetime.utcnow()
+        from datetime import timezone, timedelta
+        china_tz = timezone(timedelta(hours=8))
+        now = datetime.now(china_tz)
+
         if time_range == "today":
-            # 今天00:00开始
+            # 今天00:00开始（北京时间）
             start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            query = query.filter(Resume.created_at >= start_time)
+            # 转换为UTC时间用于数据库查询
+            start_time_utc = start_time.astimezone(timezone.utc)
+            query = query.filter(Resume.created_at >= start_time_utc)
         elif time_range == "this_week":
-            # 本周一00:00开始
+            # 本周一00:00开始（北京时间）
             start_time = now - timedelta(days=now.weekday())
             start_time = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
-            query = query.filter(Resume.created_at >= start_time)
+            start_time_utc = start_time.astimezone(timezone.utc)
+            query = query.filter(Resume.created_at >= start_time_utc)
         elif time_range == "this_month":
-            # 本月1号00:00开始
+            # 本月1号00:00开始（北京时间）
             start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            query = query.filter(Resume.created_at >= start_time)
+            start_time_utc = start_time.astimezone(timezone.utc)
+            query = query.filter(Resume.created_at >= start_time_utc)
+
+    # 姓名搜索
+    if search:
+        query = query.filter(Resume.candidate_name.ilike(f"%{search}%"))
 
     total = query.count()
 
@@ -130,6 +171,7 @@ def list_resumes(
             "updated_at": resume.updated_at.isoformat() if resume.updated_at else None,
             # Agent相关字段
             "city": resume.city,
+            "candidate_cities": resume.candidate_cities or [],
             "job_category": resume.job_category,
             "agent_score": resume.agent_score,
             "agent_evaluation_id": resume.agent_evaluation_id,
@@ -175,6 +217,9 @@ def get_resume(resume_id: UUID, db: Session = Depends(get_db)):
         "source_email_subject": resume.source_email_subject,
         "source_sender": resume.source_sender,
         "status": resume.status,
+        "city": resume.city,
+        "candidate_cities": resume.candidate_cities or [],
+        "job_category": resume.job_category,
         "created_at": resume.created_at.isoformat() if resume.created_at else None,
         "updated_at": resume.updated_at.isoformat() if resume.updated_at else None
     }
@@ -349,6 +394,7 @@ def reparse_resume(
         )
 
         # 更新工作经历、项目经历、教育背景、工作年限等字段
+        resume.candidate_name = parsed_data.get('candidate_name')
         resume.work_experience = parsed_data.get('work_experience', [])
         resume.project_experience = parsed_data.get('project_experience', [])
         resume.education_history = parsed_data.get('education_history', [])
@@ -360,12 +406,22 @@ def reparse_resume(
         resume.work_years = work_years if work_years is not None else 0
         resume.skills = parsed_data.get('skills', [])
         resume.skills_by_level = parsed_data.get('skills_by_level', {})
+
+        # 重新提取城市信息（只从邮件主题提取）
+        city_result = city_extractor.extract_city(
+            email_subject=resume.source_email_subject or '',
+            email_body='',  # 不再从正文提取
+            resume_text=''  # 不再从简历文本提取
+        )
+        resume.city = city_result.confirmed_city
+        resume.candidate_cities = city_result.candidate_cities
+
         resume.updated_at = datetime.now()
 
         db.commit()
         db.refresh(resume)
 
-        logger.info(f"简历重新解析成功: {resume.id}, ���选人: {resume.candidate_name}, 工作年限: {resume.work_years}")
+        logger.info(f"简历重新解析成功: {resume.id}, 候选人: {resume.candidate_name}, 工作年限: {resume.work_years}")
 
         return {
             "resume_id": str(resume.id),
@@ -378,6 +434,114 @@ def reparse_resume(
     except Exception as e:
         logger.error(f"重新解析简历失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"重新解析失败: {str(e)}")
+
+
+@router.post("/reextract-cities", response_model=dict)
+def reextract_all_cities(
+    db: Session = Depends(get_db)
+):
+    """批量重新提取所有简历的意向城市
+
+    只从邮件主题提取城市，不再从正文和简历文本提取
+    """
+    try:
+        # 获取所有简历
+        all_resumes = db.query(Resume).all()
+
+        updated_count = 0
+        failed_count = 0
+
+        for resume in all_resumes:
+            try:
+                # 重新提取城市信息（只从邮件主题提取）
+                city_result = city_extractor.extract_city(
+                    email_subject=resume.source_email_subject or '',
+                    email_body='',  # 不再从正文提取
+                    resume_text=''  # 不再从简历文本提取
+                )
+
+                # 更新城市字段
+                old_city = resume.city
+                old_candidates = resume.candidate_cities
+
+                resume.city = city_result.confirmed_city
+                resume.candidate_cities = city_result.candidate_cities
+
+                # 记录有变化的简历
+                if old_city != resume.city or old_candidates != resume.candidate_cities:
+                    updated_count += 1
+                    logger.info(f"简历城市已更新: {resume.id} ({resume.candidate_name}): "
+                               f"{old_city} -> {resume.city}, {old_candidates} -> {resume.candidate_cities}")
+
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"更新简历城市失败: {resume.id}, 错误: {e}")
+
+        db.commit()
+
+        logger.info(f"批量重新提取城市完成: 总计 {len(all_resumes)} 份, 更新 {updated_count} 份, 失败 {failed_count} 份")
+
+        return {
+            "message": "批量重新提取城市完成",
+            "total": len(all_resumes),
+            "updated": updated_count,
+            "failed": failed_count
+        }
+
+    except Exception as e:
+        logger.error(f"批量重新提取城市失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"批量重新提取失败: {str(e)}")
+
+
+@router.post("/reextract-names", response_model=dict)
+def reextract_all_names(
+    db: Session = Depends(get_db)
+):
+    """批量重新提取所有简历的候选人姓名
+
+    只从邮件主题提取姓名，不再从简历文本提取
+    """
+    try:
+        # 获取所有有邮件主题但姓名为空的简历
+        all_resumes = db.query(Resume).filter(
+            Resume.source_email_subject.isnot(None),
+            (Resume.candidate_name.is_(None)) | (Resume.candidate_name == '')
+        ).all()
+
+        updated_count = 0
+        failed_count = 0
+
+        for resume in all_resumes:
+            try:
+                # 从邮件主题提取姓名
+                name = resume_parser._extract_name_from_email_subject(
+                    resume.source_email_subject or ''
+                )
+
+                if name:
+                    old_name = resume.candidate_name
+                    resume.candidate_name = name
+                    updated_count += 1
+                    logger.info(f"简历姓名已更新: {resume.id}: {old_name} -> {name}")
+
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"更新简历姓名失败: {resume.id}, 错误: {e}")
+
+        db.commit()
+
+        logger.info(f"批量重新提取姓名完成: 总计 {len(all_resumes)} 份, 更新 {updated_count} 份, 失败 {failed_count} 份")
+
+        return {
+            "message": "批量重新提取姓名完成",
+            "total": len(all_resumes),
+            "updated": updated_count,
+            "failed": failed_count
+        }
+
+    except Exception as e:
+        logger.error(f"批量重新提取姓名失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"批量重新提取失败: {str(e)}")
 
 
 @router.post("/{resume_id}/mark-for-review", response_model=dict)
@@ -407,6 +571,38 @@ def mark_for_review(
     return {
         "resume_id": str(resume.id),
         "message": "已标记为需要人工审核"
+    }
+
+
+@router.post("/{resume_id}/mark-interviewed", response_model=dict)
+def mark_interviewed(
+    resume_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """标记简历为已面试（如果是已面试状态则取消）"""
+    resume = db.query(Resume).filter(Resume.id == resume_id).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="简历不存在")
+
+    # 切换状态：已面试 <-> pending
+    if resume.screening_status == "已面试":
+        resume.screening_status = "pending"
+        message = "已取消已面试状态"
+    else:
+        resume.screening_status = "已面试"
+        message = "已标记为已面试"
+
+    resume.updated_at = datetime.now()
+
+    db.commit()
+    db.refresh(resume)
+
+    logger.info(f"简历状态已更新: {resume.id}, 候选人: {resume.candidate_name}, screening_status={resume.screening_status}")
+
+    return {
+        "resume_id": str(resume.id),
+        "message": message
     }
 
 

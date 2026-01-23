@@ -48,14 +48,13 @@ def check_emails():
             logger.error("连接邮箱失败")
             return
 
-        # 获取未读邮件
+        # 获取未读邮件（不再过滤）
         emails = email_service.fetch_unread_emails(
-            filter_keywords=None,  # 不过滤关键词，处理所有带附件的邮件
-            sender_whitelist=[],  # 发件人白名单
             save_path=RESUME_SAVE_PATH  # 直接保存附件
         )
 
-        logger.info(f"找到 {len(emails)} 封符合条件的未读邮件（已过滤：必须有PDF/DOCX附件）")
+
+        logger.info(f"找到 {len(emails)} 封未读邮件")
 
         # 处理每封邮件
         for idx, email_info in enumerate(emails):
@@ -118,11 +117,16 @@ def process_email(email_info: dict, email_config: dict):
         if not has_attachments:
             logger.info(f"邮件无PDF附件，跳过处理: {email_info['subject'][:50]}...")
 
-        # 移动邮件到已处理文件夹
-        email_service.move_to_folder(email_info['id'], '已处理')
-
         # 断开连接
         email_service.disconnect()
+
+        # 更新进度（邮件处理完成，无论是否有附件）
+        # 注意：这里统一计数，parse_resume中不再计数，避免重复
+        try:
+            from app.api.v1.email_monitoring import increment_import_success
+            increment_import_success()
+        except Exception as status_err:
+            logger.warning(f"更新状态失败: {status_err}")
 
     except Exception as e:
         logger.error(f"处理邮件时出错: {e}")
@@ -147,13 +151,8 @@ def parse_resume(file_path: str, email_info: dict):
 
     db = SessionLocal()
     try:
-        # 0. 检查简历是否已存在（通过file_path去重）
-        existing_resume = db.query(Resume).filter(Resume.file_path == file_path).first()
-        if existing_resume:
-            logger.info(f"简历已存在，跳过: {file_path} (ID: {existing_resume.id})")
-            return
 
-        # 1. 解析简历
+        # 1. 解析简历（先解析才能获取姓名和手机号用于去重）
         parser = ResumeParser()
         email_subject = email_info.get('subject')
         email_body = email_info.get('body', '')
@@ -189,6 +188,18 @@ def parse_resume(file_path: str, email_info: dict):
         logger.info(f"简历解析完成: {resume_data.get('candidate_name')}")
 
         # 3. 判断具体职位（使用字符串匹配，不评分）
+        # 提取城市（统一处理，后续可用）
+        city_extractor = CityExtractor()
+        city_result = city_extractor.extract_city(
+            email_subject=email_subject,
+            email_body=email_body,
+            resume_text=resume_data.get('raw_text', '')
+        )
+        city = city_result.confirmed_city
+        candidate_cities = city_result.candidate_cities
+        logger.info(f"提取城市 - 确认: {city or '无'}, 候选: {candidate_cities or '无'}")
+
+        job_title = None
         if not needs_manual_review:
             job_classifier = JobTitleClassifier()
             job_title = job_classifier.classify_job_title(
@@ -199,15 +210,6 @@ def parse_resume(file_path: str, email_info: dict):
             )
             logger.info(f"判断职位: {job_title}")
 
-            # 提取城市
-            city_extractor = CityExtractor()
-            city = city_extractor.extract_city(
-                email_subject=email_subject,
-                email_body=email_body,
-                resume_text=resume_data.get('raw_text', '')
-            )
-            logger.info(f"提取城市: {city or '未知'}")
-
         # 4. 调用外部Agent（唯一评分来源）- 无正文的简历跳过
         if needs_manual_review:
             # 无正文内容，跳过Agent评估，标记为需要人工审核
@@ -216,18 +218,9 @@ def parse_resume(file_path: str, email_info: dict):
             agent_evaluated_at = None
             agent_result = None
             job_title = None
-            city = None
             logger.info(f"简历无正文，跳过Agent评估，标记为需要人工审核")
         else:
             # 有正文内容，正常调用Agent评估
-            city_extractor = CityExtractor()
-            city = city_extractor.extract_city(
-                email_subject=email_subject,
-                email_body=email_body,
-                resume_text=resume_data.get('raw_text', '')
-            )
-            logger.info(f"提取城市: {city or '未知'}")
-
             job_classifier = JobTitleClassifier()
             job_title = job_classifier.classify_job_title(
                 email_subject=email_subject,
@@ -259,37 +252,88 @@ def parse_resume(file_path: str, email_info: dict):
             agent_evaluated_at = datetime.utcnow()
             logger.info(f"Agent评分: {agent_score}")
 
-        # 5. 保存简历到数据库
-        resume = Resume(
-            candidate_name=resume_data.get('candidate_name'),
-            phone=resume_data.get('phone'),
-            email=resume_data.get('email'),
-            education=resume_data.get('education'),
-            education_level=resume_data.get('education_level'),
-            work_years=resume_data.get('work_years', 0),
-            skills=resume_data.get('skills', []),
-            skills_by_level=resume_data.get('skills_by_level', {}),
-            work_experience=resume_data.get('work_experience', []),
-            project_experience=resume_data.get('project_experience', []),
-            education_history=resume_data.get('education_history', []),
-            raw_text=resume_data.get('raw_text'),
-            file_path=file_path,
-            file_type=file_path.split('.')[-1] if '.' in file_path else None,
-            source_email_id=email_info.get('id'),
-            source_email_subject=email_info.get('subject'),
-            source_sender=email_info.get('sender'),
-            city=city,
-            job_category=job_title,
-            pdf_path=file_path,
-            agent_score=agent_score,
-            agent_evaluation_id=agent_result.get('evaluation_id') if agent_result else None,
-            agent_evaluated_at=agent_evaluated_at,
-            screening_status=screening_status,
-            status='processed'
-        )
-        db.add(resume)
-        db.commit()
-        db.refresh(resume)
+        # 5. 检查简历是否已存在（基于姓名+手机号去重）
+        candidate_name = resume_data.get('candidate_name')
+        phone = resume_data.get('phone')
+
+        existing_resume = None
+        if candidate_name and phone:
+            # 优先使用姓名+手机号去重
+            existing_resume = db.query(Resume).filter(
+                Resume.candidate_name == candidate_name,
+                Resume.phone == phone
+            ).first()
+        elif candidate_name:
+            # 如果没有手机号，仅使用姓名去重
+            existing_resume = db.query(Resume).filter(
+                Resume.candidate_name == candidate_name
+            ).first()
+
+        if existing_resume:
+            # 更新现有简历记录
+            logger.info(f"简历已存在（姓名: {candidate_name}, 手机: {phone}），更新记录: {existing_resume.id}")
+            existing_resume.phone = resume_data.get('phone') or existing_resume.phone
+            existing_resume.email = resume_data.get('email') or existing_resume.email
+            existing_resume.education = resume_data.get('education')
+            existing_resume.education_level = resume_data.get('education_level')
+            existing_resume.work_years = resume_data.get('work_years', 0)
+            existing_resume.skills = resume_data.get('skills', [])
+            existing_resume.skills_by_level = resume_data.get('skills_by_level', {})
+            existing_resume.work_experience = resume_data.get('work_experience', [])
+            existing_resume.project_experience = resume_data.get('project_experience', [])
+            existing_resume.education_history = resume_data.get('education_history', [])
+            existing_resume.raw_text = resume_data.get('raw_text')
+            existing_resume.file_path = file_path  # 更新为最新文件路径
+            existing_resume.file_type = file_path.split('.')[-1] if '.' in file_path else None
+            existing_resume.source_email_id = email_info.get('id')
+            existing_resume.source_email_subject = email_info.get('subject')
+            existing_resume.source_sender = email_info.get('sender')
+            existing_resume.city = city
+            existing_resume.candidate_cities = candidate_cities
+            existing_resume.job_category = job_title
+            existing_resume.pdf_path = file_path
+            existing_resume.agent_score = agent_score
+            existing_resume.agent_evaluation_id = agent_result.get('evaluation_id') if agent_result else None
+            existing_resume.agent_evaluated_at = agent_evaluated_at
+            existing_resume.screening_status = screening_status
+            existing_resume.status = 'processed'
+
+            db.commit()
+            db.refresh(existing_resume)
+            resume = existing_resume
+        else:
+            # 创建新简历记录
+            resume = Resume(
+                candidate_name=resume_data.get('candidate_name'),
+                phone=resume_data.get('phone'),
+                email=resume_data.get('email'),
+                education=resume_data.get('education'),
+                education_level=resume_data.get('education_level'),
+                work_years=resume_data.get('work_years', 0),
+                skills=resume_data.get('skills', []),
+                skills_by_level=resume_data.get('skills_by_level', {}),
+                work_experience=resume_data.get('work_experience', []),
+                project_experience=resume_data.get('project_experience', []),
+                education_history=resume_data.get('education_history', []),
+                raw_text=resume_data.get('raw_text'),
+                file_path=file_path,
+                file_type=file_path.split('.')[-1] if '.' in file_path else None,
+                source_email_id=email_info.get('id'),
+                source_email_subject=email_info.get('subject'),
+                source_sender=email_info.get('sender'),
+                city=city,
+                candidate_cities=candidate_cities,
+                job_category=job_title,
+                pdf_path=file_path,
+                agent_score=agent_score,
+                agent_evaluation_id=agent_result.get('evaluation_id') if agent_result else None,
+                agent_evaluated_at=agent_evaluated_at,
+                screening_status=screening_status,
+                status='processed'
+            )
+            db.add(resume)
+            db.commit()
+            db.refresh(resume)
 
         if needs_manual_review:
             logger.info(f"简历已保存到数据库（需人工审核）: {resume.id}")
@@ -303,6 +347,8 @@ def parse_resume(file_path: str, email_info: dict):
             logger.info(f"简历处理完成（需人工审核）: {resume.candidate_name}, 无正文内容")
         elif agent_result:
             logger.info(f"简历处理完成: {resume.candidate_name}, Agent评分: {agent_result.get('score', 'N/A')}")
+
+        # 不再更新进度，因为process_email已经计数了
 
     except Exception as e:
         db.rollback()
@@ -319,7 +365,18 @@ def fetch_recent_resumes(limit: int = 20):
     Args:
         limit: 抓取邮件数量（默认20封）
     """
+    from app.api.v1.email_monitoring import update_import_status
+
     logger.info(f"开始抓取最近 {limit} 封邮件中的简历...")
+
+    # 更新状态：开始扫描
+    update_import_status(
+        running=True,
+        total=0,
+        processed=0,
+        current_folder="正在连接邮箱...",
+        message="正在扫描邮箱文件夹"
+    )
 
     email_config = {
         'email_address': os.getenv('DEMO_EMAIL', 'es1@cloudpense.com'),
@@ -384,34 +441,33 @@ def fetch_recent_resumes(limit: int = 20):
             folder_names = list(folder_map.keys())
             logger.info(f"找到文件夹: {folder_names}")
 
-            # 优先扫描包含"已处理"/"processed"/"Processed"的文件夹
+            # 扫描文件夹的顺序：INBOX优先，然后是其他文件夹
             folders_to_scan = []  # List of decoded names
-            processed_folder = None
 
-            # 先找"已处理"文件夹
+            # 先找INBOX
             for fn in folder_names:
-                if '已处理' in fn or 'processed' in fn.lower() or 'Processed' in fn:
-                    processed_folder = fn
-                    folders_to_scan.insert(0, fn)  # 优先处理
-                    break
-
-            # 再找INBOX
-            for fn in folder_names:
-                if 'INBOX' in fn.upper() and fn != processed_folder:
+                if 'INBOX' in fn.upper():
                     folders_to_scan.append(fn)
                     break
 
-            # 如果还没找到，添加其他文件夹
+            # 添加所有其他文件夹（不再限制3个）
             for fn in folder_names:
-                if fn not in folders_to_scan and fn != processed_folder:
-                    folders_to_scan.append(fn)
-                    if len(folders_to_scan) >= 3:  # 最多扫描3个文件夹
-                        break
+                if fn not in folders_to_scan:
+                    # 排除一些不需要的文件夹
+                    if fn not in ['Drafts', 'Sent Messages', 'Deleted Messages', 'Junk']:
+                        folders_to_scan.append(fn)
 
             logger.info(f"将扫描文件夹: {folders_to_scan}")
 
+            # 更新状态：找到文件夹
+            update_import_status(
+                current_folder=f"找到 {len(folders_to_scan)} 个文件夹",
+                message=f"将扫描: {', '.join(folders_to_scan[:3])}{'...' if len(folders_to_scan) > 3 else ''}"
+            )
+
         except Exception as e:
             logger.error(f"获取文件夹列表失败: {e}")
+            update_import_status(message=f"获取文件夹列表失败: {e}")
             folder_map = {'INBOX': 'INBOX'}  # Fallback mapping
             folders_to_scan = ['INBOX']
 
@@ -420,6 +476,12 @@ def fetch_recent_resumes(limit: int = 20):
 
         for folder_decoded in folders_to_scan:
             logger.info(f"扫描文件夹: {folder_decoded}")
+
+            # 更新状��：正在扫描文件夹
+            update_import_status(
+                current_folder=f"正在扫描: {folder_decoded}",
+                message=f"扫描文件夹 {len(folders_to_scan)}/{folders_to_scan.index(folder_decoded) + 1}"
+            )
 
             # 获取编码后的文件夹名（用于 IMAP 操作）
             folder_encoded = folder_map.get(folder_decoded, folder_decoded)
@@ -440,14 +502,18 @@ def fetch_recent_resumes(limit: int = 20):
             fetch_limit = limit if limit < 1000 else 9999  # 如果limit>=1000，表示获取全部
             emails = email_service.fetch_recent_emails(
                 limit=fetch_limit,
-                filter_keywords=None,
-                sender_whitelist=[],
                 save_path=RESUME_SAVE_PATH  # 直接保存附件
             )
 
-            logger.info(f"文件夹 {folder_decoded} 中找到 {len(emails)} 封符合条件的邮件")
+            logger.info(f"文件夹 {folder_decoded} 中找到 {len(emails)} 封邮件")
             all_emails.extend(emails)
             total_found += len(emails)
+
+            # 更新状态：找到邮件
+            update_import_status(
+                total=total_found,
+                message=f"在 {folder_decoded} 中找到 {len(emails)} 封邮件"
+            )
 
             # 如果已经找到足够的邮件且不是获取全部模式，停止扫描
             if fetch_limit < 1000 and len(all_emails) >= fetch_limit:
@@ -464,6 +530,14 @@ def fetch_recent_resumes(limit: int = 20):
 
         logger.info(f"总共找到 {len(unique_emails)} 封唯一邮件（去重后）")
 
+        # 更新状态：开始处理邮件
+        update_import_status(
+            total=len(unique_emails),
+            processed=0,
+            current_folder="开始处理邮件",
+            message=f"找到 {len(unique_emails)} 封待处理邮件"
+        )
+
         # 处理每封邮件（限制数量）
         processed_count = 0
         for idx, email_info in enumerate(unique_emails[:limit]):
@@ -473,6 +547,13 @@ def fetch_recent_resumes(limit: int = 20):
             )
             process_email.delay(email_info, email_config)
             processed_count += 1
+
+            # 每10封邮件更新一次状态
+            if (idx + 1) % 10 == 0 or idx == len(unique_emails[:limit]) - 1:
+                update_import_status(
+                    processed=idx + 1,
+                    message=f"已处理 {idx + 1}/{len(unique_emails)} 封邮件"
+                )
 
         # 断开连接
         email_service.disconnect()
@@ -486,10 +567,26 @@ def fetch_recent_resumes(limit: int = 20):
         }
 
         logger.info(f"抓取完成: {result}")
+
+        # 更新状态：扫描完成，等待后台解析
+        # 注意：running保持为True，直到所有解析任务完成
+        # 这里的message改为"扫描完成"，让前端知道扫描阶段已结束
+        update_import_status(
+            total=len(unique_emails),
+            processed=processed_count,
+            current_folder="正在解析简历...",
+            message=f"扫描完成，{processed_count}封邮件正在后台解析中..."
+        )
+
         return result
 
     except Exception as e:
         logger.error(f"抓取邮件时出错: {e}")
+        update_import_status(
+            running=False,
+            current_folder="导入失败",
+            message=f"抓取失败: {str(e)}"
+        )
         return {'status': 'error', 'message': f'抓取失败: {str(e)}'}
 
 
@@ -525,14 +622,12 @@ def check_new_emails():
             logger.error("连接邮箱失败")
             return {'status': 'error', 'message': '连接邮箱失败'}
 
-        # 只获取未读邮件
+        # 只获取未读邮件（不再过滤）
         emails = email_service.fetch_unread_emails(
-            filter_keywords=None,
-            sender_whitelist=[],
             save_path=RESUME_SAVE_PATH  # 直接保存附件
         )
 
-        logger.info(f"找到 {len(emails)} 封未读邮件（有PDF/DOCX附件）")
+        logger.info(f"找到 {len(emails)} 封未读邮件")
 
         if len(emails) == 0:
             logger.info("没有新的未读邮件需要处理")

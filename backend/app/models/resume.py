@@ -39,6 +39,7 @@ class Resume(Base):
 
     # 地理和分类信息
     city = Column(String(50))  # 提取的城市（如"北京"、"上海"、"未知"）
+    candidate_cities = Column(JSONB, default=list, comment="候选城市列表（非100%确认）")
     job_category = Column(String(20))  # hr/software/finance/sales/uncategorized
 
     # PDF相关

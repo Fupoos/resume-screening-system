@@ -36,16 +36,20 @@ from app.utils.text_cleaner import TextCleaner
 logger = logging.getLogger(__name__)
 
 
-def reparse_all_resumes():
-    """使用最新解析逻辑重新解析所有简历"""
+def reparse_all_resumes(limit: int = 200):
+    """使用最新解析逻辑重新解析所有简历
+
+    Args:
+        limit: 重新解析的简历数量，默认200份（最近的）
+    """
     db = SessionLocal()
 
     try:
-        # 查询所有有原始文本的简历
+        # 查询最近N份有原始文本的简历（按创建时间倒序）
         resumes = db.query(Resume).filter(
             Resume.raw_text.isnot(None),
             Resume.raw_text != ''
-        ).all()
+        ).order_by(Resume.created_at.desc()).limit(limit).all()
 
         total = len(resumes)
         logger.info(f"找到 {total} 份有正文的简历\n")

@@ -1,12 +1,11 @@
-/** 简历列表页面 - 显示所有导入的简历及其最佳匹配 - v2 */
-import { useState, useEffect, useMemo } from 'react';
+/** 简历列表页面 - 显示所有导入的简历及其最佳匹配 - v3 */
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Card,
   Table,
   Button,
   Tag,
   Space,
-  Upload,
   message,
   Modal,
   Descriptions,
@@ -14,42 +13,46 @@ import {
   Tooltip,
   Tabs,
   Radio,
+  Input,
 } from 'antd';
 import {
-  UploadOutlined,
   DeleteOutlined,
   EyeOutlined,
-  InboxOutlined,
-  SyncOutlined,
   ReloadOutlined,
-  CloudDownloadOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
-import type { UploadProps } from 'antd';
-import { getResumes, deleteResume, importHistoricalEmails, markResumeForReview } from '../../services/api';
+import {
+  getResumes,
+  deleteResume,
+  markResumeForReview,
+} from '../../services/api';
 import type { Resume } from '../../types';
 import { SkillsDisplay } from '../../components/SkillsDisplay';
-
-const { Dragger } = Upload;
+import { MultiSourceUploadModal } from '../../components/MultiSourceUploadModal';
+import { renderAsync } from 'docx-preview';
 
 const ResumesPage = () => {
   const [resumes, setResumes] = useState<Resume[]>([]);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
-  const [uploading, setUploading] = useState(false);
-  const [checkingEmail, setCheckingEmail] = useState(false);
-  const [polling, setPolling] = useState(false);
-  const [importingHistorical, setImportingHistorical] = useState(false);
   const [selectedResume, setSelectedResume] = useState<Resume | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
-  const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [rawTextExpanded, setRawTextExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState('parsed'); // 'parsed' | 'pdf' | 'raw'
+  const [docxLoading, setDocxLoading] = useState(false);
+  const docxContainerRef = useRef<HTMLDivElement>(null);
   const [timeRange, setTimeRange] = useState<string>('all'); // 'all' | 'today' | 'this_week' | 'this_month'
   const [timeStats, setTimeStats] = useState({ today: 0, thisWeek: 0, thisMonth: 0, all: 0 });
   const [sortField, setSortField] = useState<string>('created_at');
   const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | null>('descend');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+
+  // 新增：人名搜索
+  const [nameSearch, setNameSearch] = useState('');
+
+  // 批量上传相关状态
+  const [multiSourceUploadModalVisible, setMultiSourceUploadModalVisible] = useState(false);
 
   // 加载简历列表
   useEffect(() => {
@@ -60,6 +63,58 @@ const ResumesPage = () => {
   useEffect(() => {
     loadResumes(1, 50);
   }, [timeRange]);
+
+  // 加载DOCX预览
+  useEffect(() => {
+    const loadDocxPreview = async () => {
+      if (!detailVisible || !selectedResume) {
+        // 清空容器
+        if (docxContainerRef.current) {
+          docxContainerRef.current.innerHTML = '';
+        }
+        return;
+      }
+
+      // 只处理DOCX文件且切换到原始文件标签时
+      if ((selectedResume.file_type === 'docx' || selectedResume.file_type === 'doc') && activeTab === 'pdf') {
+        const container = docxContainerRef.current;
+        if (!container) return;
+
+        setDocxLoading(true);
+        try {
+          // 获取DOCX文件
+          const response = await fetch(`http://localhost:8000/api/v1/pdfs/${selectedResume.id}`);
+          if (!response.ok) {
+            throw new Error('无法获取文件');
+          }
+
+          const arrayBuffer = await response.arrayBuffer();
+
+          // 渲染DOCX
+          await renderAsync(arrayBuffer, container, undefined, {
+            className: 'docx-preview',
+            inWrapper: true,
+          });
+
+          // 添加样式优化
+          const style = document.createElement('style');
+          style.textContent = `
+            .docx-preview { padding: 20px; }
+            .docx-wrapper { background: white; }
+            section.docx { margin-bottom: 0; box-shadow: none; }
+          `;
+          container.appendChild(style);
+        } catch (error) {
+          console.error('DOCX预览失败:', error);
+          container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#999;">预览失败，请下载后查看</div>';
+        } finally {
+          setDocxLoading(false);
+        }
+      }
+    };
+
+    loadDocxPreview();
+  }, [detailVisible, selectedResume, activeTab]);
 
   // 学历等级颜色映射
   const getEducationLevelColor = (level: string) => {
@@ -148,6 +203,10 @@ const ResumesPage = () => {
       if (timeRange !== 'all') {
         params.time_range = timeRange;
       }
+      // 添加姓名搜索
+      if (nameSearch) {
+        params.search = nameSearch;
+      }
       const data = await getResumes(params);
       setResumes(data.items || []);
       setTotal(data.total || 0);
@@ -202,108 +261,10 @@ const ResumesPage = () => {
     setTimeRange(e.target.value);
   };
 
-  // 导入历史邮件
-  const handleImportHistorical = async () => {
-    setImportingHistorical(true);
-    try {
-      const result = await importHistoricalEmails(1000);
-      message.success(result.message || '历史邮件导入已启动');
-
-      // 启动轮询刷新机制（每10秒刷新一次，持续5分钟）
-      setPolling(true);
-      let pollCount = 0;
-      const maxPolls = 30; // 30次 * 10秒 = 5分钟
-
-      const pollInterval = setInterval(async () => {
-        pollCount++;
-        await handleRefresh();
-
-        if (pollCount >= maxPolls) {
-          clearInterval(pollInterval);
-          setPolling(false);
-          message.info('自动刷新结束');
-        }
-      }, 10000);
-
-    } catch (error) {
-      message.error('导入历史邮件失败');
-      setPolling(false);
-    } finally {
-      setImportingHistorical(false);
-    }
-  };
-
-  const handleCheckEmail = async () => {
-    setCheckingEmail(true);
-    try {
-      const response = await fetch('http://localhost:8000/api/v1/email/trigger-check', {
-        method: 'POST',
-      });
-      const result = await response.json();
-      message.success(result.message || '邮箱检查已启动');
-
-      // 启动轮询刷新机制（每5秒刷新一次，持续60秒）
-      setPolling(true);
-      let pollCount = 0;
-      const maxPolls = 12; // 12次 * 5秒 = 60秒
-
-      const pollInterval = setInterval(async () => {
-        pollCount++;
-        await handleRefresh();
-
-        if (pollCount >= maxPolls) {
-          clearInterval(pollInterval);
-          setPolling(false);
-          message.info('自动刷新结束');
-        }
-      }, 5000);
-
-      // 立即刷新一次
-      setTimeout(() => {
-        message.info('正在刷新简历列表...');
-        handleRefresh();
-      }, 3000);
-
-    } catch (error) {
-      message.error('触发邮箱检查失败');
-      setPolling(false);
-    } finally {
-      setCheckingEmail(false);
-    }
-  };
-
-  // 上传简历
-  const handleUpload: UploadProps['customRequest'] = async (options) => {
-    const { file, onSuccess, onError } = options;
-    setUploading(true);
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file as File);
-      formData.append('auto_match', 'true');
-
-      // 直接调用API
-      const response = await fetch('http://localhost:8000/api/v1/resumes/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('上传失败');
-      }
-
-      const result = await response.json();
-
-      message.success('简历上传成功！');
-      onSuccess?.(result);
-      setUploadModalVisible(false);
-      handleRefresh();
-    } catch (error) {
-      message.error('上传简历失败');
-      onError?.(error as Error);
-    } finally {
-      setUploading(false);
-    }
+  // 批量上传完成回调
+  const handleMultiSourceUploadComplete = () => {
+    setMultiSourceUploadModalVisible(false);
+    handleRefresh();
   };
 
   // 删除简历
@@ -394,6 +355,21 @@ const ResumesPage = () => {
       ),
     },
     {
+      title: '目标城市',
+      key: 'city',
+      width: 120,
+      render: (_: any, record: Resume) => {
+        const city = (record as any).city;
+        return city ? (
+          <Tag color="blue" style={{ fontWeight: 500 }}>
+            {city}
+          </Tag>
+        ) : (
+          <span style={{ color: '#999' }}>-</span>
+        );
+      },
+    },
+    {
       title: '技能标签',
       dataIndex: 'skills',
       key: 'skills',
@@ -462,24 +438,44 @@ const ResumesPage = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div style={{ flex: 1 }}>
           <h2 style={{ margin: 0 }}>简历管理</h2>
-          {polling && (
-            <div style={{ fontSize: 12, color: '#1890ff', marginTop: 4 }}>
-              <SyncOutlined spin /> 自动刷新中...
-            </div>
-          )}
+
           {/* 时间筛选器 */}
           <div style={{ marginTop: 12 }}>
-            <Space size="middle">
-              <span style={{ color: '#666' }}>筛选:</span>
-              <Radio.Group value={timeRange} onChange={handleTimeRangeChange} buttonStyle="solid">
-                <Radio.Button value="all">全部 <span style={{ color: '#1890ff' }}>({timeStats.all})</span></Radio.Button>
-                <Radio.Button value="today">今天 <span style={{ color: '#ff4d4f' }}>({timeStats.today})</span></Radio.Button>
-                <Radio.Button value="this_week">本周 <span style={{ color: '#faad14' }}>({timeStats.thisWeek})</span></Radio.Button>
-                <Radio.Button value="this_month">本月 <span style={{ color: '#1890ff' }}>({timeStats.thisMonth})</span></Radio.Button>
-              </Radio.Group>
+            <Space size="large">
+              <Space size="middle">
+                <span style={{ color: '#666' }}>筛选:</span>
+                <Radio.Group value={timeRange} onChange={handleTimeRangeChange} buttonStyle="solid">
+                  <Radio.Button value="all">全部 <span style={{ color: '#1890ff' }}>({timeStats.all})</span></Radio.Button>
+                  <Radio.Button value="today">今天 <span style={{ color: '#ff4d4f' }}>({timeStats.today})</span></Radio.Button>
+                  <Radio.Button value="this_week">本周 <span style={{ color: '#faad14' }}>({timeStats.thisWeek})</span></Radio.Button>
+                  <Radio.Button value="this_month">本月 <span style={{ color: '#1890ff' }}>({timeStats.thisMonth})</span></Radio.Button>
+                </Radio.Group>
+              </Space>
+              <Space size="middle">
+                <span style={{ color: '#666' }}>搜索:</span>
+                <Input.Search
+                  placeholder="搜索候选人姓名"
+                  allowClear
+                  style={{ width: 200 }}
+                  value={nameSearch}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNameSearch(value);
+                    // 如果清空搜索，自动刷新列表
+                    if (value === '') {
+                      loadResumes(1, pageSize);
+                    }
+                  }}
+                  onClear={() => {
+                    setNameSearch('');
+                    loadResumes(1, pageSize);
+                  }}
+                  onSearch={() => loadResumes(1, pageSize)}
+                />
+              </Space>
             </Space>
           </div>
         </div>
@@ -493,27 +489,11 @@ const ResumesPage = () => {
             刷新列表
           </Button>
           <Button
-            type="default"
-            icon={<SyncOutlined />}
-            onClick={handleCheckEmail}
-            loading={checkingEmail}
-          >
-            检查邮箱
-          </Button>
-          <Button
-            type="default"
-            icon={<CloudDownloadOutlined />}
-            onClick={handleImportHistorical}
-            loading={importingHistorical}
-          >
-            导入历史邮件
-          </Button>
-          <Button
             type="primary"
             icon={<UploadOutlined />}
-            onClick={() => setUploadModalVisible(true)}
+            onClick={() => setMultiSourceUploadModalVisible(true)}
           >
-            导入简历
+            批量上传
           </Button>
         </Space>
       </div>
@@ -548,38 +528,6 @@ const ResumesPage = () => {
         />
       </Card>
 
-      {/* 上传简历弹窗 */}
-      <Modal
-        title="导入简历"
-        open={uploadModalVisible}
-        onCancel={() => setUploadModalVisible(false)}
-        footer={null}
-        width={600}
-      >
-        <Dragger
-          name="file"
-          multiple={false}
-          accept=".pdf,.docx,.doc"
-          customRequest={handleUpload}
-          disabled={uploading}
-          showUploadList={false}
-        >
-          <p className="ant-upload-drag-icon">
-            <InboxOutlined style={{ fontSize: 48, color: '#1890ff' }} />
-          </p>
-          <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
-          <p className="ant-upload-hint">
-            支持 PDF 和 DOCX 格式，上传后将自动解析并匹配所有岗位
-          </p>
-        </Dragger>
-
-        {uploading && (
-          <div style={{ textAlign: 'center', marginTop: 24 }}>
-            <Spin tip="正在解析简历并自动匹配..." />
-          </div>
-        )}
-      </Modal>
-
       {/* 简历详情弹窗 */}
       <Modal
         title="简历详情"
@@ -588,6 +536,10 @@ const ResumesPage = () => {
           setDetailVisible(false);
           setRawTextExpanded(false); // 重置展开状态
           setActiveTab('parsed'); // 重置Tab
+          // 清空DOCX容器
+          if (docxContainerRef.current) {
+            docxContainerRef.current.innerHTML = '';
+          }
         }}
         footer={null}
         width={1400}
@@ -646,21 +598,26 @@ const ResumesPage = () => {
                 key: 'pdf',
                 label: '原始文件',
                 children: (
-                  <div style={{ height: '800px', border: '1px solid #e8e8e8', borderRadius: 8, overflow: 'hidden' }}>
+                  <div style={{ height: 'calc(100vh - 250px)', minHeight: 750, border: '1px solid #e8e8e8', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
                     {selectedResume.file_type === 'pdf' ? (
-                      // PDF直接预览，宽度100%自适应
+                      // PDF直接预览，使用更大的缩放比例
                       <iframe
-                        src={`http://localhost:8000/api/v1/pdfs/${selectedResume.id}#view=FitH`}
+                        src={`http://localhost:8000/api/v1/pdfs/${selectedResume.id}#zoom=175`}
                         style={{ width: '100%', height: '100%', border: 'none' }}
                         title="简历PDF"
                       />
                     ) : selectedResume.file_type === 'docx' || selectedResume.file_type === 'doc' ? (
-                      // DOCX使用后端preview端点预览
-                      <iframe
-                        src={`http://localhost:8000/api/v1/pdfs/${selectedResume.id}/preview`}
-                        style={{ width: '100%', height: '100%', border: 'none' }}
-                        title="简历DOCX"
-                      />
+                      // DOCX使用docx-preview库预览
+                      docxLoading ? (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                          <Spin tip="正在加载DOCX预览..." />
+                        </div>
+                      ) : (
+                        <div
+                          ref={docxContainerRef}
+                          style={{ width: '100%', height: '100%', overflow: 'auto' }}
+                        />
+                      )
                     ) : (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#999' }}>
                         暂不支持预览此文件类型
@@ -721,6 +678,13 @@ const ResumesPage = () => {
           />
         )}
       </Modal>
+
+      {/* 多来源批量上传弹窗 */}
+      <MultiSourceUploadModal
+        visible={multiSourceUploadModalVisible}
+        onClose={() => setMultiSourceUploadModalVisible(false)}
+        onComplete={handleMultiSourceUploadComplete}
+      />
     </div>
   );
 };

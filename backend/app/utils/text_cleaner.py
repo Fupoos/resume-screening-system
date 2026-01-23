@@ -11,18 +11,73 @@ class TextCleaner:
     """文本清理工具"""
 
     @staticmethod
-    def clean_text(text: str, encoding: str = 'utf-8') -> str:
+    def _clean_markdown(text: str) -> str:
+        """清理Markdown格式标记
+
+        Args:
+            text: 包含Markdown格式的文本
+
+        Returns:
+            清理后的纯文本
+        """
+        if not text:
+            return text
+
+        # 移除标题标记 (# ## ### 等)
+        text = re.sub(r'^(#{1,6})\s+', '', text, flags=re.MULTILINE)
+
+        # 移除加粗标记 (**text** 或 __text__)
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        text = re.sub(r'__([^_]+)__', r'\1', text)
+
+        # 移除斜体标记 (*text* 或 _text_)
+        text = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'\1', text)
+        text = re.sub(r'(?<!_)_([^_]+)_(?!_)', r'\1', text)
+
+        # 移除删除线标记 (~~text~~)
+        text = re.sub(r'~~([^~]+)~~', r'\1', text)
+
+        # 移除行内代码标记 (`code`)
+        text = re.sub(r'`([^`]+)`', r'\1', text)
+
+        # 移除链接格式 [text](url) -> text
+        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+
+        # 移除图片格式 ![alt](url)
+        text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', '', text)
+
+        # 移除无序列表标记
+        text = re.sub(r'^[\s]*[-*+]\s+', '', text, flags=re.MULTILINE)
+
+        # 移除有序列表标记
+        text = re.sub(r'^[\s]*\d+\.\s+', '', text, flags=re.MULTILINE)
+
+        # 移除引用标记 >
+        text = re.sub(r'^[\s]*>\s+', '', text, flags=re.MULTILINE)
+
+        # 移除水平线 --- 或 ***
+        text = re.sub(r'^[\s]*[-*]{3,}[\s]*$', '', text, flags=re.MULTILINE)
+
+        return text
+
+    @staticmethod
+    def clean_text(text: str, encoding: str = 'utf-8', clean_markdown: bool = True) -> str:
         """清理和规范化文本
 
         Args:
             text: 原始文本
             encoding: 文本编码
+            clean_markdown: 是否清理Markdown格式标记
 
         Returns:
             清理后的文本
         """
         if not text:
             return ""
+
+        # 0. 清理Markdown格式（如果启用）
+        if clean_markdown:
+            text = TextCleaner._clean_markdown(text)
 
         # 1. Unicode规范化（NFKC - 兼容性分解后规范化）
         text = unicodedata.normalize('NFKC', text)

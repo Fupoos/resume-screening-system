@@ -1,5 +1,5 @@
 /** 人工审核页面 - 处理无法自动解析的简历（加密PDF/扫描件/图片简历） */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Table,
@@ -15,6 +15,7 @@ import {
   Descriptions,
   Tooltip,
   Alert,
+  Spin,
 } from 'antd';
 import {
   EditOutlined,
@@ -26,6 +27,7 @@ import {
 import { getResumes, deleteResume, updateResume, getResume } from '../../services/api';
 import type { Resume } from '../../types';
 import { SkillsDisplay } from '../../components/SkillsDisplay';
+import { renderAsync } from 'docx-preview';
 
 const { TextArea } = Input;
 
@@ -37,10 +39,64 @@ const ManualReviewPage = () => {
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [currentResume, setCurrentResume] = useState<Resume | null>(null);
   const [editForm] = Form.useForm();
+  const [docxLoading, setDocxLoading] = useState(false);
+  const docxContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadResumes();
   }, []);
+
+  // 加载DOCX预览
+  useEffect(() => {
+    const loadDocxPreview = async () => {
+      if (!detailModalVisible || !currentResume) {
+        // 清空容器
+        if (docxContainerRef.current) {
+          docxContainerRef.current.innerHTML = '';
+        }
+        return;
+      }
+
+      // 只处理DOCX文件
+      if ((currentResume as any).file_type === 'docx' || (currentResume as any).file_type === 'doc') {
+        const container = docxContainerRef.current;
+        if (!container) return;
+
+        setDocxLoading(true);
+        try {
+          // 获取DOCX文件
+          const response = await fetch(`http://localhost:8000/api/v1/pdfs/${currentResume.id}`);
+          if (!response.ok) {
+            throw new Error('无法获取文件');
+          }
+
+          const arrayBuffer = await response.arrayBuffer();
+
+          // 渲染DOCX
+          await renderAsync(arrayBuffer, container, undefined, {
+            className: 'docx-preview',
+            inWrapper: true,
+          });
+
+          // 添加样式优化
+          const style = document.createElement('style');
+          style.textContent = `
+            .docx-preview { padding: 20px; }
+            .docx-wrapper { background: white; }
+            section.docx { margin-bottom: 0; box-shadow: none; }
+          `;
+          container.appendChild(style);
+        } catch (error) {
+          console.error('DOCX预览失败:', error);
+          container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#999;">预览失败，请下载后查看</div>';
+        } finally {
+          setDocxLoading(false);
+        }
+      }
+    };
+
+    loadDocxPreview();
+  }, [detailModalVisible, currentResume]);
 
   const loadResumes = async (page = 1, pageSize = 50) => {
     setLoading(true);
@@ -220,7 +276,7 @@ const ManualReviewPage = () => {
               <Button
                 type="link"
                 size="small"
-                onClick={() => window.open(`http://localhost:8000/api/v1/pdfs/${record.id}`, '_blank')}
+                onClick={() => window.open(`http://localhost:8000/api/v1/pdfs/${record.id}#zoom=175`, '_blank')}
               >
                 查看PDF
               </Button>
@@ -368,9 +424,21 @@ const ManualReviewPage = () => {
       <Modal
         title="简历详情"
         open={detailModalVisible}
-        onCancel={() => setDetailModalVisible(false)}
+        onCancel={() => {
+          setDetailModalVisible(false);
+          // 清空DOCX容器
+          if (docxContainerRef.current) {
+            docxContainerRef.current.innerHTML = '';
+          }
+        }}
         footer={[
-          <Button key="close" onClick={() => setDetailModalVisible(false)}>
+          <Button key="close" onClick={() => {
+            setDetailModalVisible(false);
+            // 清空DOCX容器
+            if (docxContainerRef.current) {
+              docxContainerRef.current.innerHTML = '';
+            }
+          }}>
             关闭
           </Button>,
           <Button
@@ -407,7 +475,8 @@ const ManualReviewPage = () => {
                 <h4>原始文件预览</h4>
                 <div
                   style={{
-                    height: '500px',
+                    height: 'calc(100vh - 250px)',
+                    minHeight: 750,
                     border: '1px solid #e8e8e8',
                     borderRadius: 8,
                     overflow: 'hidden',
@@ -415,7 +484,7 @@ const ManualReviewPage = () => {
                   }}
                 >
                   <iframe
-                    src={`http://localhost:8000/api/v1/pdfs/${currentResume.id}#view=FitH`}
+                    src={`http://localhost:8000/api/v1/pdfs/${currentResume.id}#zoom=175`}
                     style={{ width: '100%', height: '100%', border: 'none' }}
                     title="简历PDF预览"
                   />
@@ -428,18 +497,24 @@ const ManualReviewPage = () => {
                 <h4>原始文件预览</h4>
                 <div
                   style={{
-                    height: '500px',
+                    height: 'calc(100vh - 250px)',
+                    minHeight: 750,
                     border: '1px solid #e8e8e8',
                     borderRadius: 8,
-                    overflow: 'hidden',
-                    backgroundColor: '#f5f5f5'
+                    overflow: 'auto',
+                    backgroundColor: '#fff'
                   }}
                 >
-                  <iframe
-                    src={`http://localhost:8000/api/v1/pdfs/${currentResume.id}/preview`}
-                    style={{ width: '100%', height: '100%', border: 'none' }}
-                    title="简历DOCX预览"
-                  />
+                  {docxLoading ? (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                      <Spin tip="正在加载DOCX预览..." />
+                    </div>
+                  ) : (
+                    <div
+                      ref={docxContainerRef}
+                      style={{ width: '100%', height: '100%' }}
+                    />
+                  )}
                 </div>
               </div>
             )}

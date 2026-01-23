@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '20260105'
+revision = '20260105_update_screening_result_fields'
 down_revision = '20260104_add_agent_config_fields'
 branch_labels = None
 depends_on = None

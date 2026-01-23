@@ -22,6 +22,9 @@ class ResumeBase(BaseModel):
     work_years: Optional[int] = Field(None, description="工作年限")
     skills: Optional[List[str]] = Field(default_factory=list, description="技能标签")
     skills_by_level: Optional[SkillsByLevel] = Field(None, description="技能按熟练度分类")
+    city: Optional[str] = Field(None, description="确认城市")
+    candidate_cities: Optional[List[str]] = Field(default_factory=list, description="候选城市列表")
+    job_category: Optional[str] = Field(None, description="职位类别")
 
 
 class ResumeCreate(ResumeBase):

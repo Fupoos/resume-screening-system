@@ -17,7 +17,6 @@ class EmailConfig(Base):
     imap_server = Column(String(100), default="imap.exmail.qq.com")
     imap_port = Column(Integer, default=993)
     folder = Column(String(100), default="INBOX")
-    processed_folder = Column(String(100), default="已处理")
 
     # 过滤配置
     filter_keywords = Column(JSONB, default=list)  # 过滤关键词列表

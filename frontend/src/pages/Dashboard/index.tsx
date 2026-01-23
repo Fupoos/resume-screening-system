@@ -1,12 +1,14 @@
 /** 仪表盘页面 */
-import { useEffect, useState } from 'react';
-import { Card, Row, Col, Statistic, Table, Spin, Alert, Typography } from 'antd';
+import { useEffect, useState, useRef } from 'react';
+import { Card, Row, Col, Statistic, Table, Spin, Alert, Typography, Button, Space, Tag } from 'antd';
 import {
   FileTextOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
   TrophyOutlined,
+  ReloadOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import {
   getDashboardStatistics,
@@ -17,19 +19,26 @@ import type { ColumnsType } from 'antd/es/table';
 
 const { Title } = Typography;
 
+const AUTO_REFRESH_INTERVAL = 30000; // 30秒自动刷新
+
 const DashboardPage = () => {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [cityData, setCityData] = useState<Record<string, any>>({});
   const [jobData, setJobData] = useState<Record<string, any>>({});
+  const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
 
-  useEffect(() => {
-    fetchAllData();
-  }, []);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchAllData = async () => {
-    setLoading(true);
+  const fetchAllData = async (showRefreshLoading = false) => {
+    if (showRefreshLoading) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     try {
       // 并发请求所有数据
@@ -42,12 +51,45 @@ const DashboardPage = () => {
       setDashboardData(dashboard);
       setCityData(city);
       setJobData(job);
+      setLastUpdateTime(new Date());
     } catch (err: any) {
       setError(err.message || '加载数据失败');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
+
+  // 设置自动刷新
+  const setupAutoRefresh = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    if (autoRefreshEnabled) {
+      intervalRef.current = setInterval(() => {
+        fetchAllData(false); // 后台刷新，不显示loading
+      }, AUTO_REFRESH_INTERVAL);
+    }
+  };
+
+  // 手动刷新
+  const handleManualRefresh = () => {
+    fetchAllData(true);
+    // 重置定时器
+    setupAutoRefresh();
+  };
+
+  // 初始化和自动刷新
+  useEffect(() => {
+    fetchAllData();
+    setupAutoRefresh();
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, [autoRefreshEnabled]);
 
   // 城市统计表格列
   const cityColumns: ColumnsType<any> = [
@@ -202,7 +244,36 @@ const DashboardPage = () => {
 
   return (
     <div>
-      <Title level={2}>仪表盘</Title>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Title level={2} style={{ margin: 0 }}>仪表盘</Title>
+        <Space>
+          {refreshing && (
+            <Tag color="processing" icon={<SyncOutlined spin />}>
+              刷新中...
+            </Tag>
+          )}
+          {lastUpdateTime && !loading && (
+            <span style={{ color: '#999', fontSize: 12, marginRight: 8 }}>
+              最后更新: {lastUpdateTime.toLocaleTimeString()}
+            </span>
+          )}
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={handleManualRefresh}
+            loading={refreshing}
+            size="small"
+          >
+            刷新
+          </Button>
+          <Tag
+            color={autoRefreshEnabled ? 'success' : 'default'}
+            style={{ cursor: 'pointer' }}
+            onClick={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
+          >
+            {autoRefreshEnabled ? '自动刷新: 开' : '自动刷新: 关'}
+          </Tag>
+        </Space>
+      </div>
 
       {/* 综合统计卡片 */}
       <Row gutter={16} style={{ marginTop: 24 }}>

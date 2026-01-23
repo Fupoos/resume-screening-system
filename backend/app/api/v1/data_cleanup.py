@@ -215,10 +215,10 @@ async def cleanup_and_rematch(db: Session = Depends(get_db)) -> Dict[str, Any]:
 
 def recalculate_all_work_years_impl(db: Session) -> Dict[str, Any]:
     """重新计算工作年限的同步实现"""
-    # 查找所有有PDF且有正文的简历
+    # 查找所有有PDF/DOCX且有正文的简历
     resumes = db.query(Resume).filter(
         and_(
-            Resume.file_type == 'pdf',
+            Resume.file_type.in_(['pdf', 'docx']),
             Resume.raw_text.isnot(None),
             Resume.raw_text != ''
         )
