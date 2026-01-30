@@ -1,7 +1,7 @@
 """URL下载服务 - 从远程URL下载简历文件"""
 import os
 import asyncio
-import aiohttp
+import httpx
 import zipfile
 import logging
 import hashlib
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class URLDownloadService:
-    """URL下载服务"""
+    """URL下载服务 - 使用httpx替代aiohttp，统一HTTP客户端"""
 
     # 允许的文件类型
     ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.zip'}
@@ -84,42 +84,42 @@ class URLDownloadService:
         filename = self._extract_filename(url)
 
         try:
-            timeout = aiohttp.ClientTimeout(total=self.DOWNLOAD_TIMEOUT)
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=timeout) as response:
-                    if response.status != 200:
-                        return False, "", f"下载失败 (HTTP {response.status}): {url}"
+            timeout = httpx.Timeout(self.DOWNLOAD_TIMEOUT)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(url)
+                if response.status_code != 200:
+                    return False, "", f"下载失败 (HTTP {response.status_code}): {url}"
 
-                    # 检查文件大小
-                    content_length = response.headers.get('Content-Length')
-                    if content_length and int(content_length) > self.MAX_FILE_SIZE:
-                        return False, "", f"文件过大: {url}"
+                # 检查文件大小
+                content_length = response.headers.get('Content-Length')
+                if content_length and int(content_length) > self.MAX_FILE_SIZE:
+                    return False, "", f"文件过大: {url}"
 
-                    # 从Content-Disposition获取更准确的文件名
-                    content_disposition = response.headers.get('Content-Disposition')
-                    if content_disposition:
-                        filename = self._parse_content_disposition(content_disposition, filename)
+                # 从Content-Disposition获取更准确的文件名
+                content_disposition = response.headers.get('Content-Disposition')
+                if content_disposition:
+                    filename = self._parse_content_disposition(content_disposition, filename)
 
-                    # 检查文件类型
-                    if not self._is_allowed_file(filename):
-                        return False, "", f"不支持的文件类型: {filename}"
+                # 检查文件类型
+                if not self._is_allowed_file(filename):
+                    return False, "", f"不支持的文件类型: {filename}"
 
-                    # 保存文件
-                    file_path = self._get_unique_filepath(filename, prefix="url")
+                # 保存文件
+                file_path = self._get_unique_filepath(filename, prefix="url")
 
-                    content = await response.read()
-                    if len(content) > self.MAX_FILE_SIZE:
-                        return False, "", f"文件过大: {filename}"
+                content = response.content
+                if len(content) > self.MAX_FILE_SIZE:
+                    return False, "", f"文件过大: {filename}"
 
-                    with open(file_path, 'wb') as f:
-                        f.write(content)
+                with open(file_path, 'wb') as f:
+                    f.write(content)
 
-                    logger.info(f"URL下载成功: {url} -> {file_path}")
-                    return True, file_path, ""
+                logger.info(f"URL下载成功: {url} -> {file_path}")
+                return True, file_path, ""
 
         except asyncio.TimeoutError:
             return False, "", f"下载超时: {url}"
-        except aiohttp.ClientError as e:
+        except httpx.HTTPError as e:
             return False, "", f"网络错误: {str(e)}"
         except Exception as e:
             logger.error(f"下载文件异常: {url}, 错误: {e}")

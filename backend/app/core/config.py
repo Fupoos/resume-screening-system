@@ -1,7 +1,10 @@
 """应用配置管理"""
 from typing import List
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -78,6 +81,14 @@ class Settings(BaseSettings):
         default="",
         description="FastGPT API密钥"
     )
+    FASTGPT_API_KEY_RD: str = Field(
+        default="",
+        description="FastGPT RD职位API密钥"
+    )
+    FASTGPT_API_KEY_MEDICAL: str = Field(
+        default="",
+        description="FastGPT Medical职位API密钥"
+    )
     FASTGPT_BASE_URL: str = Field(
         default="https://ai.cloudpense.com/api",
         description="FastGPT API基础URL"
@@ -93,9 +104,66 @@ class Settings(BaseSettings):
         description="邮箱授权码"
     )
 
+    @field_validator('SECRET_KEY', 'ENCRYPTION_KEY')
+    @classmethod
+    def validate_security_keys(cls, v, info):
+        """验证安全密钥在生产环境是否为默认值"""
+        # 只在生产环境（DEBUG=False）进行严格检查
+        # 获取DEBUG值，如果info.data中存在则使用，否则假设为False
+        is_debug = info.data.get('DEBUG', False) if hasattr(info, 'data') else False
+
+        if not is_debug:
+            # 不安全的默认值列表
+            insecure_defaults = [
+                "your-secret-key-change-in-production",
+                "your-encryption-key-32-bytes-long-change",
+                ""
+            ]
+            if v in insecure_defaults:
+                raise ValueError(
+                    f"生产环境禁止使用不安全的默认密钥。"
+                    f"请在环境变量中设置 {info.field_name}。"
+                )
+            # 检查密钥长度
+            if len(v) < 32:
+                raise ValueError(
+                    f"{info.field_name} 长度必须至少32字符（当前：{len(v)}字符）"
+                )
+        return v
+
     class Config:
         env_file = ".env"
         case_sensitive = True
+
+
+def validate_settings(settings: Settings) -> None:
+    """验证配置，生产环境拒绝不安全的默认值
+
+    Args:
+        settings: 配置对象
+
+    Raises:
+        ValueError: 配置验证失败
+    """
+    errors = []
+
+    if not settings.DEBUG:
+        # 生产环境检查
+        if settings.SECRET_KEY == "your-secret-key-change-in-production":
+            errors.append("生产环境必须设置自定义 SECRET_KEY")
+        if settings.ENCRYPTION_KEY == "your-encryption-key-32-bytes-long-change":
+            errors.append("生产环境必须设置自定义 ENCRYPTION_KEY")
+        if len(settings.SECRET_KEY) < 32:
+            errors.append(f"SECRET_KEY 长度必须至少32字符（当前：{len(settings.SECRET_KEY)}）")
+        if len(settings.ENCRYPTION_KEY) != 32:
+            errors.append(f"ENCRYPTION_KEY 必须是32字节（当前：{len(settings.ENCRYPTION_KEY)}）")
+
+    if errors:
+        error_msg = "配置验证失败:\n" + "\n".join(f"  - {e}" for e in errors)
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    logger.info("配置验证通过")
 
 
 settings = Settings()

@@ -5,7 +5,7 @@ from pathlib import Path
 from celery import shared_task
 from app.tasks.celery_app import celery_app
 from app.services.email_service import EmailService
-from app.services.resume_parser import ResumeParser
+from app.services.parsers.base_parser import ResumeParser
 import logging
 
 logger = logging.getLogger(__name__)
@@ -117,6 +117,9 @@ def process_email(email_info: dict, email_config: dict):
         if not has_attachments:
             logger.info(f"邮件无PDF附件，跳过处理: {email_info['subject'][:50]}...")
 
+        # 标记邮件为已读（避免重复处理）
+        email_service.mark_as_read(email_info['id'])
+
         # 断开连接
         email_service.disconnect()
 
@@ -205,8 +208,7 @@ def parse_resume(file_path: str, email_info: dict):
             job_title = job_classifier.classify_job_title(
                 email_subject=email_subject,
                 resume_text=resume_data.get('raw_text', ''),
-                skills=resume_data.get('skills', []),
-                skills_by_level=resume_data.get('skills_by_level', {})
+                skills=resume_data.get('skills', [])
             )
             logger.info(f"判断职位: {job_title}")
 
@@ -225,8 +227,7 @@ def parse_resume(file_path: str, email_info: dict):
             job_title = job_classifier.classify_job_title(
                 email_subject=email_subject,
                 resume_text=resume_data.get('raw_text', ''),
-                skills=resume_data.get('skills', []),
-                skills_by_level=resume_data.get('skills_by_level', {})
+                skills=resume_data.get('skills', [])
             )
             logger.info(f"判断职位: {job_title}")
 
@@ -278,7 +279,6 @@ def parse_resume(file_path: str, email_info: dict):
             existing_resume.education_level = resume_data.get('education_level')
             existing_resume.work_years = resume_data.get('work_years', 0)
             existing_resume.skills = resume_data.get('skills', [])
-            existing_resume.skills_by_level = resume_data.get('skills_by_level', {})
             existing_resume.work_experience = resume_data.get('work_experience', [])
             existing_resume.project_experience = resume_data.get('project_experience', [])
             existing_resume.education_history = resume_data.get('education_history', [])
@@ -311,7 +311,6 @@ def parse_resume(file_path: str, email_info: dict):
                 education_level=resume_data.get('education_level'),
                 work_years=resume_data.get('work_years', 0),
                 skills=resume_data.get('skills', []),
-                skills_by_level=resume_data.get('skills_by_level', {}),
                 work_experience=resume_data.get('work_experience', []),
                 project_experience=resume_data.get('project_experience', []),
                 education_history=resume_data.get('education_history', []),

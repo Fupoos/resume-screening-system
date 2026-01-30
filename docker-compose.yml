@@ -7,7 +7,7 @@ services:
     container_name: resume-db
     environment:
       POSTGRES_USER: resume
-      POSTGRES_PASSWORD: resume123
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resume123}
       POSTGRES_DB: resume_screening
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -40,17 +40,17 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://resume:resume123@db:5432/resume_screening
+      - DATABASE_URL=postgresql+asyncpg://resume:${POSTGRES_PASSWORD:-resume123}@db:5432/resume_screening
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=your-secret-key-change-in-production
-      - ENCRYPTION_KEY=your-encryption-key-32-bytes-long-change
-      - DEBUG=True
-      - DEMO_EMAIL=es1@cloudpense.com
-      - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
-      - FASTGPT_API_KEY=api-lzaV5DY9iZH30L15AZ4gpmlFZCmdulswPhRAnKHexG97iCbVvbFqkwIL5
-      - FASTGPT_API_KEY_RD=api-uqiElk0rKOgdz9HDBg0jLchZ9obvIZYbmI6QPBFuHnhSql5HbGXrsqohCw
-      - FASTGPT_API_KEY_MEDICAL=api-rlvpmsKuCZKolLflO32cODcS3nsvRWRiixtaJZWMhdTFulWBoRxjHcVtbP
-      - FASTGPT_BASE_URL=https://ai.cloudpense.com/api
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-for-testing-please-change-in-production}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dev-encryption-key-32-bytes-long-for-testing}
+      - DEBUG=${DEBUG:-true}
+      - DEMO_EMAIL=${DEMO_EMAIL:-}
+      - DEMO_AUTH_CODE=${DEMO_AUTH_CODE}
+      - FASTGPT_API_KEY=${FASTGPT_API_KEY}
+      - FASTGPT_API_KEY_RD=${FASTGPT_API_KEY_RD}
+      - FASTGPT_API_KEY_MEDICAL=${FASTGPT_API_KEY_MEDICAL}
+      - FASTGPT_BASE_URL=${FASTGPT_BASE_URL:-}
     volumes:
       - ./backend:/app
       - resume_files:/app/resume_files
@@ -68,16 +68,16 @@ services:
       dockerfile: Dockerfile
     container_name: resume-celery
     environment:
-      - DATABASE_URL=postgresql+asyncpg://resume:resume123@db:5432/resume_screening
+      - DATABASE_URL=postgresql+asyncpg://resume:${POSTGRES_PASSWORD:-resume123}@db:5432/resume_screening
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=your-secret-key-change-in-production
-      - ENCRYPTION_KEY=your-encryption-key-32-bytes-long-change
-      - DEMO_EMAIL=es1@cloudpense.com
-      - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
-      - FASTGPT_API_KEY=api-lzaV5DY9iZH30L15AZ4gpmlFZCmdulswPhRAnKHexG97iCbVvbFqkwIL5
-      - FASTGPT_API_KEY_RD=api-uqiElk0rKOgdz9HDBg0jLchZ9obvIZYbmI6QPBFuHnhSql5HbGXrsqohCw
-      - FASTGPT_API_KEY_MEDICAL=api-rlvpmsKuCZKolLflO32cODcS3nsvRWRiixtaJZWMhdTFulWBoRxjHcVtbP
-      - FASTGPT_BASE_URL=https://ai.cloudpense.com/api
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-for-testing-please-change-in-production}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dev-encryption-key-32-bytes-long-for-testing}
+      - DEMO_EMAIL=${DEMO_EMAIL:-}
+      - DEMO_AUTH_CODE=${DEMO_AUTH_CODE}
+      - FASTGPT_API_KEY=${FASTGPT_API_KEY}
+      - FASTGPT_API_KEY_RD=${FASTGPT_API_KEY_RD}
+      - FASTGPT_API_KEY_MEDICAL=${FASTGPT_API_KEY_MEDICAL}
+      - FASTGPT_BASE_URL=${FASTGPT_BASE_URL:-}
     volumes:
       - ./backend:/app
       - resume_files:/app/resume_files
@@ -93,16 +93,16 @@ services:
       dockerfile: Dockerfile
     container_name: resume-celery-beat
     environment:
-      - DATABASE_URL=postgresql+asyncpg://resume:resume123@db:5432/resume_screening
+      - DATABASE_URL=postgresql+asyncpg://resume:${POSTGRES_PASSWORD:-resume123}@db:5432/resume_screening
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=your-secret-key-change-in-production
-      - ENCRYPTION_KEY=your-encryption-key-32-bytes-long-change
-      - DEMO_EMAIL=es1@cloudpense.com
-      - DEMO_AUTH_CODE=bBgoF4oBr9RD7j2J
-      - FASTGPT_API_KEY=api-lzaV5DY9iZH30L15AZ4gpmlFZCmdulswPhRAnKHexG97iCbVvbFqkwIL5
-      - FASTGPT_API_KEY_RD=api-uqiElk0rKOgdz9HDBg0jLchZ9obvIZYbmI6QPBFuHnhSql5HbGXrsqohCw
-      - FASTGPT_API_KEY_MEDICAL=api-rlvpmsKuCZKolLflO32cODcS3nsvRWRiixtaJZWMhdTFulWBoRxjHcVtbP
-      - FASTGPT_BASE_URL=https://ai.cloudpense.com/api
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-for-testing-please-change-in-production}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dev-encryption-key-32-bytes-long-for-testing}
+      - DEMO_EMAIL=${DEMO_EMAIL:-}
+      - DEMO_AUTH_CODE=${DEMO_AUTH_CODE}
+      - FASTGPT_API_KEY=${FASTGPT_API_KEY}
+      - FASTGPT_API_KEY_RD=${FASTGPT_API_KEY_RD}
+      - FASTGPT_API_KEY_MEDICAL=${FASTGPT_API_KEY_MEDICAL}
+      - FASTGPT_BASE_URL=${FASTGPT_BASE_URL:-}
     volumes:
       - ./backend:/app
       - resume_files:/app/resume_files

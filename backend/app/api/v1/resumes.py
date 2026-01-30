@@ -15,8 +15,10 @@ from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
 from app.models.job import Job
 from app.models.user import User
-from app.services.resume_parser import ResumeParser
+from app.services.parsers import ResumeParser
 from app.services.city_extractor import CityExtractor
+from app.services.agent_client import AgentClient
+from app.services.job_title_classifier import JobTitleClassifier
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -24,6 +26,7 @@ logger = logging.getLogger(__name__)
 # 初始化服务
 resume_parser = ResumeParser()
 city_extractor = CityExtractor()
+job_classifier = JobTitleClassifier()
 
 # 文件保存目录
 UPLOAD_DIR = "/app/resume_files"
@@ -405,7 +408,6 @@ def reparse_resume(
         work_years = parsed_data.get('work_years', 0)
         resume.work_years = work_years if work_years is not None else 0
         resume.skills = parsed_data.get('skills', [])
-        resume.skills_by_level = parsed_data.get('skills_by_level', {})
 
         # 重新提取城市信息（只从邮件主题提取）
         city_result = city_extractor.extract_city(
@@ -434,6 +436,122 @@ def reparse_resume(
     except Exception as e:
         logger.error(f"重新解析简历失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"重新解析失败: {str(e)}")
+
+
+@router.post("/{resume_id}/reparse-and-evaluate", response_model=dict)
+def reparse_and_evaluate_resume(
+    resume_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """从原始文件重新解析并触发Agent评估
+
+    用于人工审核页面处理无法自动解析的简历（加密PDF、扫描件等）
+    会从原文件重新提取文本，更新简历信息，并调用FastGPT Agent进行评估
+    """
+    resume = db.query(Resume).filter(Resume.id == resume_id).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="简历不存在")
+
+    # 构建文件路径（优先使用pdf_path，其次file_path）
+    file_path = resume.pdf_path or resume.file_path
+
+    if not file_path:
+        raise HTTPException(status_code=400, detail="简历没有关联的文件路径")
+
+    # 检查文件是否存在
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=400, detail=f"原始文件不存在: {file_path}")
+
+    try:
+        # 根据文件类型解析
+        file_ext = Path(file_path).suffix.lower()
+
+        if file_ext == '.pdf':
+            parsed_data = resume_parser._parse_pdf(file_path, email_subject=resume.source_email_subject)
+        elif file_ext in ['.docx', '.doc']:
+            parsed_data = resume_parser._parse_docx(file_path, email_subject=resume.source_email_subject)
+        else:
+            raise HTTPException(status_code=400, detail=f"不支持的文件格式: {file_ext}")
+
+        # 更新简历raw_text和其他解析信息
+        resume.raw_text = parsed_data.get('raw_text', '')
+        resume.candidate_name = parsed_data.get('candidate_name') or resume.candidate_name
+        resume.phone = parsed_data.get('phone') or resume.phone
+        resume.email = parsed_data.get('email') or resume.email
+        resume.education = parsed_data.get('education')
+        resume.education_level = parsed_data.get('education_level')
+        resume.work_years = parsed_data.get('work_years', 0) if parsed_data.get('work_years') is not None else 0
+        resume.skills = parsed_data.get('skills', [])
+        resume.work_experience = parsed_data.get('work_experience', [])
+        resume.project_experience = parsed_data.get('project_experience', [])
+        resume.education_history = parsed_data.get('education_history', [])
+
+        logger.info(f"简历重新解析成功: {resume.id}, 文本长度: {len(resume.raw_text or '')}")
+
+        # 判断职位分类
+        job_title = job_classifier.classify_job_title(
+            email_subject=resume.source_email_subject or '',
+            resume_text=resume.raw_text or '',
+            skills=resume.skills or []
+        )
+        resume.job_category = job_title
+        logger.info(f"职位分类: {job_title}")
+
+        # 调用Agent评估
+        agent_client = AgentClient()
+        resume_data = {
+            'raw_text': resume.raw_text,
+            'candidate_name': resume.candidate_name,
+            'phone': resume.phone,
+            'email': resume.email,
+            'education': resume.education,
+            'work_years': resume.work_years,
+            'skills': resume.skills,
+            'work_experience': resume.work_experience,
+            'project_experience': resume.project_experience,
+            'education_history': resume.education_history,
+        }
+
+        agent_result = agent_client.evaluate_resume(
+            job_title=job_title,
+            city=resume.city,
+            pdf_path=file_path,
+            resume_data=resume_data
+        )
+
+        # 更新评估结果
+        if agent_result is None:
+            # 未配置FastGPT
+            resume.agent_score = None
+            resume.screening_status = 'pending'
+            resume.agent_evaluated_at = None
+            logger.info(f"职位 '{job_title}' 未配置FastGPT，跳过Agent评估")
+        else:
+            resume.agent_score = agent_result['score']
+            resume.screening_status = agent_result.get('screening_status', 'pending')
+            resume.agent_evaluation_id = agent_result.get('evaluation_id')
+            resume.agent_evaluated_at = datetime.utcnow()
+            logger.info(f"Agent评分: {resume.agent_score}, 状态: {resume.screening_status}")
+
+        resume.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(resume)
+
+        return {
+            "resume_id": str(resume.id),
+            "raw_text_length": len(resume.raw_text or ''),
+            "agent_score": resume.agent_score,
+            "screening_status": resume.screening_status,
+            "job_category": resume.job_category,
+            "message": "重新解析并评估成功"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重新解析并评估失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"重新解析并评估失败: {str(e)}")
 
 
 @router.post("/reextract-cities", response_model=dict)

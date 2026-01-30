@@ -5,27 +5,38 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
+import bcrypt  # 直接使用 bcrypt，避免 passlib 初始化问题
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User, UserJobCategory
-
-# 密码加密上下文
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # HTTP Bearer token 认证
 security = HTTPBearer()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """验证密码"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """验证密码 - 直接使用 bcrypt 避免 passlib 初始化问题"""
+    # bcrypt 有72字节限制，截断密码
+    if isinstance(plain_password, str):
+        plain_password = plain_password.encode('utf-8')
+    if isinstance(hashed_password, str):
+        hashed_password = hashed_password.encode('utf-8')
+    # 截断到72字节
+    plain_password = plain_password[:72]
+    return bcrypt.checkpw(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
-    """生成密码哈希"""
-    return pwd_context.hash(password)
+    """生成密码哈希 - 直接使用 bcrypt"""
+    if isinstance(password, str):
+        password = password.encode('utf-8')
+    # 截断到72字节
+    password = password[:72]
+    # 生成 salt 并哈希
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password, salt)
+    return hashed.decode('utf-8')
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

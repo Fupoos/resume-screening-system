@@ -183,7 +183,7 @@ UNIVERSITIES_QS_51_100_FOREIGN = [
     "University of St Andrews", "圣安德鲁斯大学",
     # 澳大利亚
     "University of Queensland", "昆士兰大学",
-    "Monash University", "莫纳什大学",
+    "Monash University", "莫纳什大学", "蒙纳士大学",
     "University of New South Wales", "UNSW", "新南威尔士大学",
     # 加拿大
     "University of Alberta", "阿尔伯塔大学",

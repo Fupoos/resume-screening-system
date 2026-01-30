@@ -9,7 +9,7 @@ import logging
 from app.core.database import get_db, SessionLocal
 from app.models.resume import Resume
 from app.models.screening_result import ScreeningResult
-from app.services.resume_parser import ResumeParser
+from app.services.parsers import ResumeParser
 
 logger = logging.getLogger(__name__)
 

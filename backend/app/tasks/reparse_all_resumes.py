@@ -1,4 +1,4 @@
-"""全面重新解析所有简历（使用最新解析逻辑）
+"""全面重新解析所有简历（使用最新解析逻辑，重新读取PDF）
 
 更新字段：
 - candidate_name: 候选人姓名
@@ -8,13 +8,13 @@
 - education_level: 学历等级（985/211/双非等）
 - work_years: 工作年限
 - skills: 技能列表
-- skills_by_level: 按熟练度分类的技能
 - work_experience: 工作经历
 - project_experience: 项目经历
 - education_history: 教育背景
 
 使用方法：
     docker-compose exec backend python3 -m app.tasks.reparse_all_resumes
+    docker-compose exec backend python3 -m app.tasks.reparse_all_resumes --limit 1000
 """
 import sys
 import os
@@ -30,46 +30,56 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from datetime import datetime
 from app.core.database import SessionLocal
 from app.models.resume import Resume
-from app.services.resume_parser import ResumeParser
-from app.utils.text_cleaner import TextCleaner
+from app.services.parsers.base_parser import ResumeParser
 
 logger = logging.getLogger(__name__)
 
 
-def reparse_all_resumes(limit: int = 200):
-    """使用最新解析逻辑重新解析所有简历
+def reparse_all_resumes(limit: int = 200, target_id: str = None):
+    """使用最新解析逻辑重新解析所有简历（重新读取PDF文件）
 
     Args:
         limit: 重新解析的简历数量，默认200份（最近的）
+        target_id: 只重新解析指定ID的简历
     """
     db = SessionLocal()
 
     try:
-        # 查询最近N份有原始文本的简历（按创建时间倒序）
-        resumes = db.query(Resume).filter(
-            Resume.raw_text.isnot(None),
-            Resume.raw_text != ''
-        ).order_by(Resume.created_at.desc()).limit(limit).all()
+        # 构建查询
+        if target_id:
+            resumes = db.query(Resume).filter(Resume.id == target_id).all()
+            logger.info(f"目标简历ID: {target_id}")
+        else:
+            # 查询最近N份有PDF文件的简历（按创建时间倒序）
+            resumes = db.query(Resume).filter(
+                Resume.pdf_path.isnot(None),
+                Resume.pdf_path != ''
+            ).order_by(Resume.created_at.desc()).limit(limit).all()
 
         total = len(resumes)
-        logger.info(f"找到 {total} 份有正文的简历\n")
+        logger.info(f"找到 {total} 份有PDF文件的简历\n")
 
         updated_count = 0
         no_change_count = 0
         error_count = 0
+        file_not_found_count = 0
 
         parser = ResumeParser()
 
         for idx, resume in enumerate(resumes, 1):
-            try:
-                # 先清理文本（处理单字行等问题）
-                cleaned_text = TextCleaner.clean_text(resume.raw_text)
+            file_path = resume.pdf_path or resume.file_path
 
-                # 使用最新的解析逻辑重新解析
-                parsed_data = parser._parse_text(
-                    cleaned_text,
-                    email_subject=resume.source_email_subject,
-                    filename=resume.file_path
+            # 检查文件是否存在
+            if not file_path or not os.path.exists(file_path):
+                file_not_found_count += 1
+                logger.warning(f"文件不存在: {file_path} (简历: {resume.candidate_name})")
+                continue
+
+            try:
+                # 重新解析PDF文件（使用最新的解析逻辑）
+                parsed_data = parser.parse_resume(
+                    file_path,
+                    email_subject=resume.source_email_subject
                 )
 
                 # 检查是否有变化
@@ -151,12 +161,12 @@ def reparse_all_resumes(limit: int = 200):
                     changes.append(f"技能: {len(old_skills)}个 -> {len(new_skills)}个")
                     resume.skills = new_skills
 
-                old_skills_by_level = resume.skills_by_level or {}
-                new_skills_by_level = parsed_data.get('skills_by_level', {})
-                if old_skills_by_level != new_skills_by_level:
+                # 更新raw_text
+                old_raw = resume.raw_text
+                new_raw = parsed_data.get('raw_text', '')
+                if old_raw != new_raw:
                     has_change = True
-                    changes.append(f"技能分类: 已更新")
-                    resume.skills_by_level = new_skills_by_level
+                    resume.raw_text = new_raw
 
                 # 如果有变化，更新数据库
                 if has_change:
@@ -164,25 +174,25 @@ def reparse_all_resumes(limit: int = 200):
                     db.commit()
                     updated_count += 1
 
-                    if idx % 20 == 0 or idx == total:
-                        logger.info(
-                            f"[{idx}/{total}] {resume.candidate_name or '未命名'}: "
-                            f"更新 {len(changes)} 项"
-                        )
-                        for change in changes[:3]:  # 只显示前3项变化
-                            logger.info(f"  - {change}")
-                        if len(changes) > 3:
-                            logger.info(f"  - ... 还有 {len(changes) - 3} 项变化")
+                    logger.info(
+                        f"[{idx}/{total}] {resume.candidate_name or '未命名'}: "
+                        f"更新 {len(changes)} 项"
+                    )
+                    for change in changes[:5]:  # 显示前5项变化
+                        logger.info(f"  - {change}")
+                    if len(changes) > 5:
+                        logger.info(f"  - ... 还有 {len(changes) - 5} 项变化")
                 else:
                     no_change_count += 1
 
-                # 定期显示进度（每100份显示一次，减少输出）
-                if idx % 100 == 0:
+                # 定期显示进度（每50份显示一次）
+                if idx % 50 == 0:
                     logger.info(
                         f"进度: {idx}/{total} | "
                         f"已更新: {updated_count} | "
                         f"无变化: {no_change_count} | "
-                        f"错误: {error_count}"
+                        f"错误: {error_count} | "
+                        f"文件不存在: {file_not_found_count}"
                     )
 
             except Exception as e:
@@ -195,6 +205,7 @@ def reparse_all_resumes(limit: int = 200):
         logger.info("全面重新解析完成！")
         logger.info("=" * 80)
         logger.info(f"总简历数: {total}")
+        logger.info(f"文件不存在: {file_not_found_count}")
         logger.info(f"成功更新: {updated_count}")
         logger.info(f"无变化: {no_change_count}")
         logger.info(f"错误: {error_count}")
@@ -210,5 +221,13 @@ def reparse_all_resumes(limit: int = 200):
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser_args = argparse.ArgumentParser(description="重新解析所有简历")
+    parser_args.add_argument("--limit", type=int, default=200, help="重新解析的简历数量")
+    parser_args.add_argument("--id", type=str, default=None, help="只重新解析指定ID的简历")
+
+    args = parser_args.parse_args()
+
     logger.info("开始全面重新解析简历...\n")
-    reparse_all_resumes()
+    reparse_all_resumes(limit=args.limit, target_id=args.id)

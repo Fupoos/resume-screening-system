@@ -40,6 +40,7 @@ const ManualReviewPage = () => {
   const [currentResume, setCurrentResume] = useState<Resume | null>(null);
   const [editForm] = Form.useForm();
   const [docxLoading, setDocxLoading] = useState(false);
+  const [reparseLoading, setReparseLoading] = useState(false);
   const docxContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -181,6 +182,43 @@ const ManualReviewPage = () => {
     }
   };
 
+  // 重新解析并评估
+  const handleReparseAndEvaluate = async () => {
+    if (!currentResume) return;
+
+    setReparseLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(
+        `http://localhost:8000/api/v1/resumes/${currentResume.id}/reparse-and-evaluate`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        }
+      );
+      const result = await response.json();
+
+      if (response.ok) {
+        message.success(
+          `重新解析成功！文本长度: ${result.raw_text_length}字符，` +
+          `职位: ${result.job_category || '未分类'}，` +
+          `评分: ${result.agent_score ?? '待评估'}`
+        );
+        setEditModalVisible(false);
+        handleRefresh();
+      } else {
+        message.error(result.detail || '重新解析失败');
+      }
+    } catch (error) {
+      console.error('重新解析失败:', error);
+      message.error('重新解析失败，请查看后端日志');
+    } finally {
+      setReparseLoading(false);
+    }
+  };
+
   // 删除简历
   const handleDelete = async (id: string) => {
     Modal.confirm({
@@ -271,17 +309,6 @@ const ManualReviewPage = () => {
       fixed: 'right' as const,
       render: (_: any, record: Resume) => (
         <Space size="small">
-          {(record as any).file_type === 'pdf' && (
-            <Tooltip title="查看PDF">
-              <Button
-                type="link"
-                size="small"
-                onClick={() => window.open(`http://localhost:8000/api/v1/pdfs/${record.id}#zoom=175`, '_blank')}
-              >
-                查看PDF
-              </Button>
-            </Tooltip>
-          )}
           <Tooltip title="查看详情">
             <Button
               type="link"
@@ -365,9 +392,27 @@ const ManualReviewPage = () => {
         title="编辑简历信息"
         open={editModalVisible}
         onCancel={() => setEditModalVisible(false)}
-        onOk={handleSaveEdit}
-        okText="保存"
-        cancelText="取消"
+        footer={[
+          <Button key="cancel" onClick={() => setEditModalVisible(false)}>
+            取消
+          </Button>,
+          <Button
+            key="reparse"
+            type="default"
+            icon={<ReloadOutlined />}
+            onClick={handleReparseAndEvaluate}
+            loading={reparseLoading}
+          >
+            重新解析并评估
+          </Button>,
+          <Button
+            key="save"
+            type="primary"
+            onClick={handleSaveEdit}
+          >
+            保存编辑
+          </Button>,
+        ]}
         width={600}
       >
         <Form form={editForm} layout="vertical">

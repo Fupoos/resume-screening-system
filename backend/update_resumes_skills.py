@@ -4,7 +4,7 @@ sys.path.append('/app')
 
 from app.core.database import SessionLocal
 from app.models.resume import Resume
-from app.services.resume_parser import ResumeParser
+from app.services.parsers.base_parser import ResumeParser
 import logging
 
 logging.basicConfig(level=logging.INFO)

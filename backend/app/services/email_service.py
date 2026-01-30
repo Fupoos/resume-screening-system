@@ -61,6 +61,27 @@ class EmailService:
             logger.error(f"连接邮箱失败: {e}")
             return False
 
+    def mark_as_read(self, email_id: str) -> bool:
+        """标记邮件为已读
+
+        Args:
+            email_id: 邮件ID
+
+        Returns:
+            是否成功
+        """
+        if not self.client:
+            return False
+
+        try:
+            # 使用 STORE 命令标记邮件为已读
+            self.client.store(email_id, '+FLAGS', '\\Seen')
+            logger.info(f"已标记邮件为已读: {email_id}")
+            return True
+        except Exception as e:
+            logger.error(f"标记邮件为已读失败: {e}")
+            return False
+
     def disconnect(self):
         """断开连接"""
         if self.client:

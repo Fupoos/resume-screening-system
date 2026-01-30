@@ -23,8 +23,7 @@ async def get_dashboard_statistics(
     🔴 只统计已配置FastGPT Agent的岗位类别（与筛选结果页面保持一致）
     🔴 非管理员用户只统计有权限的岗位类别
 
-    使用与筛选结果页面相同的数据源（screening_results表）
-    统计规则基于agent_score：
+    统计规则基于resume.agent_score字段（与筛选结果页面保持一致）：
     - 70-100分：可以发offer
     - 40-70分：待定
     - 0-40分：不合格
@@ -32,12 +31,14 @@ async def get_dashboard_statistics(
     Returns:
         {
             "overview": {
-                "total_resumes": int,      # 总简历数（已评估）
-                "pass_count": int,          # 可以发offer数量
-                "review_count": int,        # 待定数量
-                "reject_count": int,        # 不合格数量
-                "pass_rate": float,         # 通过率
-                "avg_score": float          # 平均分
+                "total_resumes": int,      # 总简历数（有效简历）
+                "evaluated_count": int,    # 已评估数量
+                "pending_count": int,      # 待评估数量
+                "pass_count": int,         # 可以发offer数量
+                "review_count": int,       # 待定数量
+                "reject_count": int,       # 不合格数量
+                "pass_rate": float,        # 通过率（基于已评估）
+                "avg_score": float         # 平均分（基于已评估）
             }
         }
     """
@@ -65,6 +66,8 @@ async def get_dashboard_statistics(
             return {
                 "overview": {
                     "total_resumes": 0,
+                    "evaluated_count": 0,
+                    "pending_count": 0,
                     "pass_count": 0,
                     "review_count": 0,
                     "reject_count": 0,
@@ -73,46 +76,61 @@ async def get_dashboard_statistics(
                 }
             }
 
-        # 从screening_results表统计（使用最新的评估结果）
-        # 🔴 只统计FastGPT岗位的简历
-        subquery = db.query(
-            ScreeningResult.resume_id,
-            func.max(ScreeningResult.agent_score).label('max_score'),
-            func.max(ScreeningResult.created_at).label('max_created')
-        ).join(
-            Resume, ScreeningResult.resume_id == Resume.id
-        ).filter(
+        # 🔴 统计所有有效简历（与筛选结果页面保持一致）
+        # 有效简历定义：PDF/DOCX + 有raw_text + job_category在FastGPT岗位中
+        base_filters = [
             Resume.job_category.in_(agent_job_names),
             Resume.file_type.in_(['pdf', 'docx']),
             Resume.raw_text.isnot(None),
             Resume.raw_text != ''
-        ).group_by(ScreeningResult.resume_id).subquery()
+        ]
 
-        # 统计各状态数量
-        total = db.query(func.count(subquery.c.resume_id)).scalar()
+        # 总简历数（所有有效简历）
+        total = db.query(func.count(Resume.id)).filter(*base_filters).scalar()
 
-        pass_count = db.query(func.count(subquery.c.resume_id)).filter(
-            subquery.c.max_score >= 70
+        # 已评估数量（有agent_score的简历）
+        evaluated_count = db.query(func.count(Resume.id)).filter(
+            *base_filters,
+            Resume.agent_score.isnot(None)
         ).scalar()
 
-        review_count = db.query(func.count(subquery.c.resume_id)).filter(
-            subquery.c.max_score >= 40,
-            subquery.c.max_score < 70
+        # 待评估数量
+        pending_count = (total or 0) - (evaluated_count or 0)
+
+        # 可以发offer数量 (agent_score >= 70)
+        pass_count = db.query(func.count(Resume.id)).filter(
+            *base_filters,
+            Resume.agent_score >= 70
         ).scalar()
 
-        reject_count = db.query(func.count(subquery.c.resume_id)).filter(
-            subquery.c.max_score < 40
+        # 待定数量 (40 <= agent_score < 70)
+        review_count = db.query(func.count(Resume.id)).filter(
+            *base_filters,
+            Resume.agent_score >= 40,
+            Resume.agent_score < 70
         ).scalar()
 
-        avg_score = db.query(func.avg(subquery.c.max_score)).scalar()
+        # 不合格数量 (agent_score < 40)
+        reject_count = db.query(func.count(Resume.id)).filter(
+            *base_filters,
+            Resume.agent_score < 40
+        ).scalar()
+
+        # 平均分（只计算已评估的）
+        avg_score = db.query(func.avg(Resume.agent_score)).filter(
+            *base_filters,
+            Resume.agent_score.isnot(None)
+        ).scalar()
 
         return {
             "overview": {
                 "total_resumes": total or 0,
+                "evaluated_count": evaluated_count or 0,
+                "pending_count": pending_count,
                 "pass_count": pass_count or 0,
                 "review_count": review_count or 0,
                 "reject_count": reject_count or 0,
-                "pass_rate": round((pass_count / total), 3) if total and total > 0 else 0,
+                "pass_rate": round((pass_count / evaluated_count), 3) if evaluated_count and evaluated_count > 0 else 0,
                 "avg_score": round(float(avg_score), 2) if avg_score else 0
             }
         }
@@ -139,9 +157,9 @@ async def get_statistics_by_city(
     """按城市统计（根据用户权限过滤）
 
     🔴 只统计已配置FastGPT Agent的岗位类别（与筛选结果页面保持一致）
-    🔴 非管理员用户���统计有权限的岗位类别
+    🔴 非管理员用户只统计有权限的岗位类别
 
-    使用screening_results表的数据，基于agent_score分类：
+    使用resume.agent_score字段进行统计（与筛选结果页面保持一致）：
     - 70-100分：可以发offer
     - 40-70分：待定
     - 0-40分：不合格
@@ -180,32 +198,24 @@ async def get_statistics_by_city(
         if not agent_job_names:
             return {}
 
-        # 获取每个简历的最新评估结果（只包含FastGPT岗位）
-        latest_scores_subquery = db.query(
-            ScreeningResult.resume_id,
-            func.max(ScreeningResult.agent_score).label('max_score')
-        ).join(
-            Resume, ScreeningResult.resume_id == Resume.id
-        ).filter(
+        # 🔴 统计所有有效简历（基于resume.agent_score）
+        base_filters = [
             Resume.job_category.in_(agent_job_names),
             Resume.file_type.in_(['pdf', 'docx']),
             Resume.raw_text.isnot(None),
             Resume.raw_text != ''
-        ).group_by(ScreeningResult.resume_id).subquery()
+        ]
 
-        # 为子query创建别名
-        latest_scores = latest_scores_subquery.alias('latest_scores')
-
-        # 关联Resume表获取城市信息
+        # 按城市统计
         query = db.query(
             Resume.city,
-            func.count(latest_scores.c.resume_id).label('total'),
-            func.sum(case((latest_scores.c.max_score >= 70, 1), else_=0)).label('pass'),
-            func.sum(case((and_(latest_scores.c.max_score >= 40, latest_scores.c.max_score < 70), 1), else_=0)).label('review'),
-            func.sum(case((latest_scores.c.max_score < 40, 1), else_=0)).label('reject'),
-            func.avg(latest_scores.c.max_score).label('avg_score')
-        ).join(
-            latest_scores, Resume.id == latest_scores.c.resume_id
+            func.count(Resume.id).label('total'),
+            func.sum(case((Resume.agent_score >= 70, 1), else_=0)).label('pass'),
+            func.sum(case((and_(Resume.agent_score >= 40, Resume.agent_score < 70), 1), else_=0)).label('review'),
+            func.sum(case((Resume.agent_score < 40, 1), else_=0)).label('reject'),
+            func.avg(Resume.agent_score).label('avg_score')
+        ).filter(
+            *base_filters
         ).group_by(Resume.city)
 
         results = query.all()
@@ -237,7 +247,7 @@ async def get_statistics_by_job(
     🔴 只统计已配置FastGPT Agent的岗位类别（与筛选结果页面保持一致）
     🔴 非管理员用户只统计有权限的岗位类别
 
-    使用screening_results表的数据，基于agent_score分类：
+    使用resume.agent_score字段进行统计（与筛选结果页面保持一致）：
     - 70-100分：可以发offer
     - 40-70分：待定
     - 0-40分：不合格
@@ -275,32 +285,24 @@ async def get_statistics_by_job(
         if not agent_job_names:
             return {}
 
-        # 获取每个简历的最新评估结果（只包含FastGPT岗位）
-        latest_scores_subquery = db.query(
-            ScreeningResult.resume_id,
-            func.max(ScreeningResult.agent_score).label('max_score')
-        ).join(
-            Resume, ScreeningResult.resume_id == Resume.id
-        ).filter(
+        # 🔴 统计所有有效简历（基于resume.agent_score）
+        base_filters = [
             Resume.job_category.in_(agent_job_names),
             Resume.file_type.in_(['pdf', 'docx']),
             Resume.raw_text.isnot(None),
             Resume.raw_text != ''
-        ).group_by(ScreeningResult.resume_id).subquery()
+        ]
 
-        # 为子query创建别名
-        latest_scores = latest_scores_subquery.alias('latest_scores')
-
-        # 关联Resume表获取职位信息
+        # 按职位统计
         query = db.query(
             Resume.job_category,
-            func.count(latest_scores.c.resume_id).label('total'),
-            func.sum(case((latest_scores.c.max_score >= 70, 1), else_=0)).label('pass'),
-            func.sum(case((and_(latest_scores.c.max_score >= 40, latest_scores.c.max_score < 70), 1), else_=0)).label('review'),
-            func.sum(case((latest_scores.c.max_score < 40, 1), else_=0)).label('reject'),
-            func.avg(latest_scores.c.max_score).label('avg_score')
-        ).join(
-            latest_scores, Resume.id == latest_scores.c.resume_id
+            func.count(Resume.id).label('total'),
+            func.sum(case((Resume.agent_score >= 70, 1), else_=0)).label('pass'),
+            func.sum(case((and_(Resume.agent_score >= 40, Resume.agent_score < 70), 1), else_=0)).label('review'),
+            func.sum(case((Resume.agent_score < 40, 1), else_=0)).label('reject'),
+            func.avg(Resume.agent_score).label('avg_score')
+        ).filter(
+            *base_filters
         ).group_by(Resume.job_category)
 
         results = query.all()
