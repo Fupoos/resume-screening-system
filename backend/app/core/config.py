@@ -90,8 +90,38 @@ class Settings(BaseSettings):
         description="FastGPT Medical职位API密钥"
     )
     FASTGPT_BASE_URL: str = Field(
-        default="https://ai.cloudpense.com/api",
+        default="http://localhost:3000",
         description="FastGPT API基础URL"
+    )
+    FASTGPT_CHAT_API: str = Field(
+        default="/api/v1/chat/completions",
+        description="FastGPT Chat Completions API路径"
+    )
+    FASTGPT_TIMEOUT: int = Field(
+        default=120,
+        description="FastGPT API超时时间（秒）"
+    )
+
+    # 阿里云OSS配置
+    OSS_ACCESS_KEY_ID: str = Field(
+        default="",
+        description="阿里云OSS Access Key ID"
+    )
+    OSS_ACCESS_KEY_SECRET: str = Field(
+        default="",
+        description="阿里云OSS Access Key Secret"
+    )
+    OSS_BUCKET: str = Field(
+        default="",
+        description="阿里云OSS Bucket名称"
+    )
+    OSS_ENDPOINT: str = Field(
+        default="",
+        description="阿里云OSS Endpoint"
+    )
+    OSS_REGION: str = Field(
+        default="",
+        description="阿里云OSS Region"
     )
 
     # 邮箱监听配置

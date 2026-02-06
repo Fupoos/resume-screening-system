@@ -5,7 +5,7 @@ from pathlib import Path
 from celery import shared_task
 from app.tasks.celery_app import celery_app
 from app.services.email_service import EmailService
-from app.services.parsers.base_parser import ResumeParser
+from app.services.resume_parser import ResumeParser
 import logging
 
 logger = logging.getLogger(__name__)
@@ -117,9 +117,6 @@ def process_email(email_info: dict, email_config: dict):
         if not has_attachments:
             logger.info(f"邮件无PDF附件，跳过处理: {email_info['subject'][:50]}...")
 
-        # 标记邮件为已读（避免重复处理）
-        email_service.mark_as_read(email_info['id'])
-
         # 断开连接
         email_service.disconnect()
 
@@ -139,26 +136,28 @@ def process_email(email_info: dict, email_config: dict):
 def parse_resume(file_path: str, email_info: dict):
     """解析简历并保存到数据库（带去重检查）
 
-    根据CLAUDE.md核心原则：
-    - 所有评分通过外部Agent完成
-    - 不使用本地JobMatcher进行匹配
-    - 不使用本地ScreeningClassifier进行分类
+    多阶段Agent处理流程：
+    1. Agent1 (FastGPT) 解析简历 + 提取信息 + 职位分类
+    2. 路由到外部评分 Agent 进行评分
+    3. 本地系统根据分数进行筛选分类
+
+    降级策略：
+    - 如果 Agent1 失败，降级到本地解析（但跳过评分）
     """
     from app.core.database import SessionLocal
     from app.models.resume import Resume
     from app.services.city_extractor import CityExtractor
-    from app.services.job_title_classifier import JobTitleClassifier
-    from app.services.agent_client import AgentClient
+    from app.services.agents.resume_orchestrator import ResumeOrchestrator
 
     logger.info(f"解析简历: {file_path}")
 
     db = SessionLocal()
     try:
-
-        # 1. 解析简历（先解析才能获取姓名和手机号用于去重）
-        parser = ResumeParser()
         email_subject = email_info.get('subject')
         email_body = email_info.get('body', '')
+
+        # 1. 首先获取简历文本（使用本地解析器提取文本）
+        parser = ResumeParser()
         resume_data = parser.parse_resume(file_path, email_subject=email_subject)
 
         # 🔴 新增：处理无正文内容的简历（保存为需要人工审核）
@@ -190,70 +189,78 @@ def parse_resume(file_path: str, email_info: dict):
 
         logger.info(f"简历解析完成: {resume_data.get('candidate_name')}")
 
-        # 3. 判断具体职位（使用字符串匹配，不评分）
-        # 提取城市（统一处理，后续可用）
-        city_extractor = CityExtractor()
-        city_result = city_extractor.extract_city(
-            email_subject=email_subject,
-            email_body=email_body,
-            resume_text=resume_data.get('raw_text', '')
-        )
-        city = city_result.confirmed_city
-        candidate_cities = city_result.candidate_cities
-        logger.info(f"提取城市 - 确认: {city or '无'}, 候选: {candidate_cities or '无'}")
-
-        job_title = None
-        if not needs_manual_review:
-            job_classifier = JobTitleClassifier()
-            job_title = job_classifier.classify_job_title(
-                email_subject=email_subject,
-                resume_text=resume_data.get('raw_text', ''),
-                skills=resume_data.get('skills', [])
-            )
-            logger.info(f"判断职位: {job_title}")
-
-        # 4. 调用外部Agent（唯一评分来源）- 无正文的简历跳过
+        # 2. 使用多阶段 Agent 编排器处理
         if needs_manual_review:
-            # 无正文内容，跳过Agent评估，标记为需要人工审核
+            # 无正文内容，跳过 Agent 处理，标记为需要人工审核
+            orchestrator_result = {
+                "success": True,
+                "parsed_info": resume_data,
+                "job_category": None,
+                "agent_score": None,
+                "screening_status": "needs_review",
+                "evaluation_id": None,
+                "processing_details": {"fallback_used": False}
+            }
+            logger.info(f"简历无正文，跳过 Agent 处理，标记为需要人工审核")
+            job_category = None
             agent_score = None
-            screening_status = 'needs_review'  # 需要人工审核
-            agent_evaluated_at = None
-            agent_result = None
-            job_title = None
-            logger.info(f"简历无正文，跳过Agent评估，标记为需要人工审核")
+            screening_status = "needs_review"
+            evaluation_id = None
+            city = None
+            candidate_cities = []
+            merged_resume_data = resume_data
         else:
-            # 有正文内容，正常调用Agent评估
-            job_classifier = JobTitleClassifier()
-            job_title = job_classifier.classify_job_title(
+            # 提取城市（统一处理，后续可用）
+            city_extractor = CityExtractor()
+            city_result = city_extractor.extract_city(
                 email_subject=email_subject,
+                email_body=email_body,
+                resume_text=resume_data.get('raw_text', '')
+            )
+            city = city_result.confirmed_city
+            candidate_cities = city_result.candidate_cities
+            logger.info(f"提取城市 - 确认: {city or '无'}, 候选: {candidate_cities or '无'}")
+
+            # 有正文内容，使用编排器进行多阶段处理
+            logger.info("使用 ResumeOrchestrator 进行多阶段 Agent 处理")
+            orchestrator = ResumeOrchestrator(db)
+            orchestrator_result = orchestrator.process_resume_with_fallback(
                 resume_text=resume_data.get('raw_text', ''),
-                skills=resume_data.get('skills', [])
-            )
-            logger.info(f"判断职位: {job_title}")
-
-            agent_client = AgentClient()
-            agent_result = agent_client.evaluate_resume(
-                job_title=job_title,
-                city=city,
-                pdf_path=file_path,
-                resume_data=resume_data
+                pdf_path=file_path
             )
 
-        # 🔴 新增：处理Agent返回None的情况（未配置FastGPT的职位）
-        if agent_result is None:
-            # 未配置FastGPT，不评分
-            agent_score = None
-            screening_status = 'pending'
-            agent_evaluated_at = None
-            logger.info(f"职位 '{job_title}' 跳过Agent评估（未配置FastGPT）")
-        else:
-            # 成功调用FastGPT
-            agent_score = agent_result['score']
-            screening_status = agent_result.get('screening_status', 'pending')
-            agent_evaluated_at = datetime.utcnow()
-            logger.info(f"Agent评分: {agent_score}")
+            if not orchestrator_result.get("success"):
+                logger.error(f"Orchestrator 处理失败: {orchestrator_result.get('error')}")
+                # 即使失败也尝试保存基本信息
+                orchestrator_result = {
+                    "success": True,
+                    "parsed_info": resume_data,
+                    "job_category": None,
+                    "agent_score": None,
+                    "screening_status": "pending",
+                    "evaluation_id": None,
+                    "processing_details": {"fallback_used": True}
+                }
 
-        # 5. 检查简历是否已存在（基于姓名+手机号去重）
+            # 3. 从处理结果中提取数据
+            parsed_info = orchestrator_result.get("parsed_info", {})
+            job_category = orchestrator_result.get("job_category")
+            agent_score = orchestrator_result.get("agent_score")
+            screening_status = orchestrator_result.get("screening_status", "pending")
+            evaluation_id = orchestrator_result.get("evaluation_id")
+
+            # 合并解析结果（优先使用 orchestrator 的结果）
+            merged_resume_data = {**resume_data, **parsed_info}
+
+            logger.info(f"处理结果 - 职位: {job_category}, 评分: {agent_score}, 状态: {screening_status}")
+            city = city_result.confirmed_city
+            candidate_cities = city_result.candidate_cities
+
+        # 设置评估时间
+        from datetime import datetime
+        agent_evaluated_at = datetime.utcnow() if agent_score is not None else None
+
+        # 4. 检查简历是否已存在（基于姓名+手机号去重）
         candidate_name = resume_data.get('candidate_name')
         phone = resume_data.get('phone')
 
@@ -270,19 +277,23 @@ def parse_resume(file_path: str, email_info: dict):
                 Resume.candidate_name == candidate_name
             ).first()
 
+        # merged_resume_data 在两个分支中都已定义，直接使用
+        final_resume_data = merged_resume_data
+
         if existing_resume:
             # 更新现有简历记录
             logger.info(f"简历已存在（姓名: {candidate_name}, 手机: {phone}），更新记录: {existing_resume.id}")
-            existing_resume.phone = resume_data.get('phone') or existing_resume.phone
-            existing_resume.email = resume_data.get('email') or existing_resume.email
-            existing_resume.education = resume_data.get('education')
-            existing_resume.education_level = resume_data.get('education_level')
-            existing_resume.work_years = resume_data.get('work_years', 0)
-            existing_resume.skills = resume_data.get('skills', [])
-            existing_resume.work_experience = resume_data.get('work_experience', [])
-            existing_resume.project_experience = resume_data.get('project_experience', [])
-            existing_resume.education_history = resume_data.get('education_history', [])
-            existing_resume.raw_text = resume_data.get('raw_text')
+            existing_resume.phone = final_resume_data.get('phone') or existing_resume.phone
+            existing_resume.email = final_resume_data.get('email') or existing_resume.email
+            existing_resume.education = final_resume_data.get('education')
+            existing_resume.education_level = final_resume_data.get('education_level')
+            existing_resume.work_years = final_resume_data.get('work_years', 0)
+            existing_resume.skills = final_resume_data.get('skills', [])
+            existing_resume.skills_by_level = final_resume_data.get('skills_by_level', {})
+            existing_resume.work_experience = final_resume_data.get('work_experience', [])
+            existing_resume.project_experience = final_resume_data.get('project_experience', [])
+            existing_resume.education_history = final_resume_data.get('education_history', [])
+            existing_resume.raw_text = final_resume_data.get('raw_text')
             existing_resume.file_path = file_path  # 更新为最新文件路径
             existing_resume.file_type = file_path.split('.')[-1] if '.' in file_path else None
             existing_resume.source_email_id = email_info.get('id')
@@ -290,10 +301,10 @@ def parse_resume(file_path: str, email_info: dict):
             existing_resume.source_sender = email_info.get('sender')
             existing_resume.city = city
             existing_resume.candidate_cities = candidate_cities
-            existing_resume.job_category = job_title
+            existing_resume.job_category = job_category
             existing_resume.pdf_path = file_path
             existing_resume.agent_score = agent_score
-            existing_resume.agent_evaluation_id = agent_result.get('evaluation_id') if agent_result else None
+            existing_resume.agent_evaluation_id = evaluation_id
             existing_resume.agent_evaluated_at = agent_evaluated_at
             existing_resume.screening_status = screening_status
             existing_resume.status = 'processed'
@@ -304,17 +315,18 @@ def parse_resume(file_path: str, email_info: dict):
         else:
             # 创建新简历记录
             resume = Resume(
-                candidate_name=resume_data.get('candidate_name'),
-                phone=resume_data.get('phone'),
-                email=resume_data.get('email'),
-                education=resume_data.get('education'),
-                education_level=resume_data.get('education_level'),
-                work_years=resume_data.get('work_years', 0),
-                skills=resume_data.get('skills', []),
-                work_experience=resume_data.get('work_experience', []),
-                project_experience=resume_data.get('project_experience', []),
-                education_history=resume_data.get('education_history', []),
-                raw_text=resume_data.get('raw_text'),
+                candidate_name=final_resume_data.get('candidate_name'),
+                phone=final_resume_data.get('phone'),
+                email=final_resume_data.get('email'),
+                education=final_resume_data.get('education'),
+                education_level=final_resume_data.get('education_level'),
+                work_years=final_resume_data.get('work_years', 0),
+                skills=final_resume_data.get('skills', []),
+                skills_by_level=final_resume_data.get('skills_by_level', {}),
+                work_experience=final_resume_data.get('work_experience', []),
+                project_experience=final_resume_data.get('project_experience', []),
+                education_history=final_resume_data.get('education_history', []),
+                raw_text=final_resume_data.get('raw_text'),
                 file_path=file_path,
                 file_type=file_path.split('.')[-1] if '.' in file_path else None,
                 source_email_id=email_info.get('id'),
@@ -322,10 +334,10 @@ def parse_resume(file_path: str, email_info: dict):
                 source_sender=email_info.get('sender'),
                 city=city,
                 candidate_cities=candidate_cities,
-                job_category=job_title,
+                job_category=job_category,
                 pdf_path=file_path,
                 agent_score=agent_score,
-                agent_evaluation_id=agent_result.get('evaluation_id') if agent_result else None,
+                agent_evaluation_id=evaluation_id,
                 agent_evaluated_at=agent_evaluated_at,
                 screening_status=screening_status,
                 status='processed'
@@ -344,8 +356,10 @@ def parse_resume(file_path: str, email_info: dict):
         # 输出处理完成日志
         if needs_manual_review:
             logger.info(f"简历处理完成（需人工审核）: {resume.candidate_name}, 无正文内容")
-        elif agent_result:
-            logger.info(f"简历处理完成: {resume.candidate_name}, Agent评分: {agent_result.get('score', 'N/A')}")
+        elif agent_score is not None:
+            logger.info(f"简历处理完成: {resume.candidate_name}, Agent评分: {agent_score}")
+        else:
+            logger.info(f"简历处理完成: {resume.candidate_name}, 职位: {job_category}")
 
         # 不再更新进度，因为process_email已经计数了
 

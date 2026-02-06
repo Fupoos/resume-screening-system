@@ -39,10 +39,13 @@ async def health_check():
 
 
 # 注册路由
-from app.api.v1 import jobs, screening, resumes, diagnostics, data_cleanup, statistics, pdfs, upload, auth
+from app.api.v1 import jobs, screening, resumes, diagnostics, data_cleanup, statistics, pdfs, upload, auth, agent_test
 
 # 认证路由（不需要认证即可访问）
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["认证"])
+
+# Agent 测试路由（用于调试）
+app.include_router(agent_test.router, prefix="/api/v1/test", tags=["Agent测试"])
 
 # 业务路由（需要认证）
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["岗位"])

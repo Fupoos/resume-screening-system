@@ -22,7 +22,6 @@ class Resume(Base):
 
     # 结构化��据（JSONB）
     skills = Column(JSONB, default=list)  # 技能标签数组
-    skills_by_level = Column(JSONB, default=None)  # 技能按熟练度分类 {expert: [], proficient: [], familiar: [], mentioned: []}
     work_experience = Column(JSONB, default=list)  # 工作经历数组
     project_experience = Column(JSONB, default=list)  # 项目经历数组
     education_history = Column(JSONB, default=list)  # 教育背景数组

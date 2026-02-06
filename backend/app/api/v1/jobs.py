@@ -18,19 +18,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.on_event("startup")
-async def startup_event():
-    """应用启动时同步岗位"""
-    try:
-        from app.tasks.init_jobs_from_agent_config import sync_jobs_from_agent_config
-        logger.info("应用启动：开始同步岗位...")
-        sync_jobs_from_agent_config()
-        logger.info("应用启动：岗位同步完成")
-    except Exception as e:
-        logger.error(f"应用启动：岗位同步失败 - {e}")
-        # 不阻止应用启动，只记录错误
-
-
 @router.get("/", response_model=List[JobResponse])
 async def list_jobs(db: Session = Depends(get_db)):
     """获取岗位列表"""
